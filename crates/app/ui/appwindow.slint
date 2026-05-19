@@ -1,0 +1,221 @@
+import { Button, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+component MetricTile inherits Rectangle {
+    in property <string> label;
+    in property <int> value;
+    in property <string> suffix;
+    in property <brush> accent;
+
+    background: #fbfcfd;
+    border-color: #d8dde3;
+    border-width: 1px;
+    border-radius: 8px;
+
+    VerticalBox {
+        padding: 18px;
+        spacing: 10px;
+
+        Text {
+            text: root.label;
+            color: #53616f;
+            font-size: 14px;
+        }
+
+        Text {
+            text: root.value;
+            color: root.accent;
+            font-size: 46px;
+            font-weight: 800;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.suffix;
+            color: #53616f;
+            font-size: 15px;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Indoor Cycling";
+    width: 900px;
+    height: 560px;
+
+    in property <string> workout-name;
+    in property <string> ride-status;
+    in property <string> current-step: "No active step";
+    in property <string> elapsed-text: "00:00";
+    in property <int> power-watts: 0;
+    in property <int> target-power-watts: 0;
+    in property <int> cadence-rpm: 0;
+    in property <int> heart-rate-bpm: 0;
+    in property <string> average-power-text: "0 W";
+
+    callback start-ride();
+    callback pause-ride();
+    callback reset-ride();
+
+    background: #f7f8fa;
+
+    VerticalBox {
+        padding: 24px;
+        spacing: 18px;
+
+        HorizontalBox {
+            spacing: 18px;
+
+            VerticalBox {
+                spacing: 4px;
+                Text {
+                    text: "Indoor Cycling";
+                    color: #17202a;
+                    font-size: 30px;
+                    font-weight: 700;
+                }
+                Text {
+                    text: root.workout-name + " - " + root.ride-status;
+                    color: #53616f;
+                    font-size: 16px;
+                }
+            }
+        }
+
+        Rectangle {
+            background: white;
+            border-color: #d8dde3;
+            border-width: 1px;
+            border-radius: 8px;
+            min-height: 250px;
+
+            HorizontalBox {
+                padding: 24px;
+                spacing: 24px;
+
+                MetricTile {
+                    label: "Power";
+                    value: root.power-watts;
+                    suffix: "W";
+                    accent: #0f766e;
+                }
+
+                MetricTile {
+                    label: "Target";
+                    value: root.target-power-watts;
+                    suffix: "W";
+                    accent: #b45309;
+                }
+
+                MetricTile {
+                    label: "Cadence";
+                    value: root.cadence-rpm;
+                    suffix: "rpm";
+                    accent: #2563eb;
+                }
+
+                MetricTile {
+                    label: "Heart Rate";
+                    value: root.heart-rate-bpm;
+                    suffix: "bpm";
+                    accent: #be123c;
+                }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 18px;
+
+            Rectangle {
+                background: white;
+                border-color: #d8dde3;
+                border-width: 1px;
+                border-radius: 8px;
+
+                VerticalBox {
+                    padding: 18px;
+                    spacing: 6px;
+
+                    Text {
+                        text: "Elapsed";
+                        color: #53616f;
+                        font-size: 14px;
+                    }
+                    Text {
+                        text: root.elapsed-text;
+                        color: #17202a;
+                        font-size: 34px;
+                        font-weight: 700;
+                    }
+                }
+            }
+
+            Rectangle {
+                background: white;
+                border-color: #d8dde3;
+                border-width: 1px;
+                border-radius: 8px;
+
+                VerticalBox {
+                    padding: 18px;
+                    spacing: 6px;
+
+                    Text {
+                        text: "Current Step";
+                        color: #53616f;
+                        font-size: 14px;
+                    }
+                    Text {
+                        text: root.current-step;
+                        color: #17202a;
+                        font-size: 24px;
+                        font-weight: 700;
+                    }
+                }
+            }
+
+            Rectangle {
+                background: white;
+                border-color: #d8dde3;
+                border-width: 1px;
+                border-radius: 8px;
+
+                VerticalBox {
+                    padding: 18px;
+                    spacing: 6px;
+
+                    Text {
+                        text: "Average Power";
+                        color: #53616f;
+                        font-size: 14px;
+                    }
+                    Text {
+                        text: root.average-power-text;
+                        color: #17202a;
+                        font-size: 24px;
+                        font-weight: 700;
+                    }
+                }
+            }
+        }
+
+        HorizontalBox {
+            spacing: 12px;
+
+            Button {
+                text: "Start";
+                clicked => { root.start-ride(); }
+            }
+
+            Button {
+                text: "Pause";
+                clicked => { root.pause-ride(); }
+            }
+
+            Button {
+                text: "Reset";
+                clicked => { root.reset-ride(); }
+            }
+        }
+    }
+}
