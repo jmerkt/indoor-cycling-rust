@@ -1,3 +1,9 @@
+mod bluetooth;
+mod discovery;
+
+pub use bluetooth::{BluetoothDeviceService, BluetoothScanner};
+pub use discovery::{DeviceId, DeviceKind, DiscoveredDevice, DiscoveryCommand, DiscoveryEvent};
+
 use indoor_cycling_core::RideSample;
 
 pub trait TrainerDevice {
@@ -10,6 +16,10 @@ pub trait TrainerDevice {
 pub enum DeviceError {
     NotConnected,
     ConnectionFailed(String),
+    BluetoothUnavailable(String),
+    ScanFailed(String),
+    InvalidData(String),
+    ServiceStopped,
 }
 
 impl std::fmt::Display for DeviceError {
@@ -17,6 +27,12 @@ impl std::fmt::Display for DeviceError {
         match self {
             Self::NotConnected => write!(formatter, "trainer is not connected"),
             Self::ConnectionFailed(message) => write!(formatter, "connection failed: {message}"),
+            Self::BluetoothUnavailable(message) => {
+                write!(formatter, "Bluetooth is unavailable: {message}")
+            }
+            Self::ScanFailed(message) => write!(formatter, "Bluetooth scan failed: {message}"),
+            Self::InvalidData(message) => write!(formatter, "invalid Bluetooth data: {message}"),
+            Self::ServiceStopped => write!(formatter, "Bluetooth service has stopped"),
         }
     }
 }

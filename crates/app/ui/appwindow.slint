@@ -1,13 +1,23 @@
 import { ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
+export struct DeviceListItem {
+    id: string,
+    name: string,
+    kind: string,
+    signal: string,
+    supports-heart-rate: bool,
+}
+
 component ActionButton inherits Rectangle {
     in property <string> text;
+    in property <bool> enabled: true;
     callback clicked();
 
     min-width: 110px;
     min-height: 40px;
     horizontal-stretch: 1;
-    background: touch.pressed ? #d8dde3 : touch.has-hover ? #eef1f4 : white;
+    opacity: root.enabled ? 1 : 0.55;
+    background: touch.pressed && root.enabled ? #d8dde3 : touch.has-hover && root.enabled ? #eef1f4 : white;
     border-color: #c7ced6;
     border-width: 1px;
     border-radius: 5px;
@@ -15,6 +25,32 @@ component ActionButton inherits Rectangle {
     Text {
         text: root.text;
         color: #17202a;
+        font-size: 15px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+component MenuButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    min-width: 120px;
+    min-height: 42px;
+    max-height: 42px;
+    background: root.selected ? #0f766e : touch.has-hover ? #eef1f4 : transparent;
+    border-radius: 5px;
+
+    Text {
+        text: root.text;
+        color: root.selected ? white : #17202a;
         font-size: 15px;
         font-weight: 600;
         horizontal-alignment: center;
@@ -78,17 +114,66 @@ export component AppWindow inherits Window {
     in property <int> cadence-rpm: 0;
     in property <int> heart-rate-bpm: 0;
     in property <string> average-power-text: "0 W";
+    in property <[DeviceListItem]> discovered-devices;
+    in property <string> device-scan-status: "Ready to scan";
+    in property <bool> device-scan-running: false;
+    in property <bool> device-scan-error: false;
+    in property <bool> device-scan-available: true;
+    in property <string> connected-heart-rate-id;
+    in property <string> connecting-heart-rate-id;
+    in property <string> heart-rate-connection-status: "No heart rate monitor connected";
+    in property <bool> heart-rate-connection-error: false;
+    in property <int> live-heart-rate-bpm: 0;
 
     callback start-ride();
     callback pause-ride();
     callback reset-ride();
+    callback scan-devices();
+    callback connect-heart-rate(string);
+    callback disconnect-heart-rate();
+
+    private property <int> current-page: 0;
 
     background: #f7f8fa;
 
     VerticalBox {
         spacing: 0px;
 
-        dashboard-scroll := ScrollView {
+        Rectangle {
+            min-height: 62px;
+            max-height: 62px;
+            background: white;
+            border-color: #d8dde3;
+            border-width: 1px;
+
+            HorizontalBox {
+                padding: 10px;
+                spacing: 10px;
+
+                Text {
+                    text: "Indoor Cycling";
+                    color: #17202a;
+                    font-size: 22px;
+                    font-weight: 700;
+                    min-width: 220px;
+                    vertical-alignment: center;
+                }
+
+                MenuButton {
+                    text: "Dashboard";
+                    selected: root.current-page == 0;
+                    clicked => { root.current-page = 0; }
+                }
+
+                MenuButton {
+                    text: "Devices";
+                    selected: root.current-page == 1;
+                    clicked => { root.current-page = 1; }
+                }
+            }
+        }
+
+        if root.current-page == 0 : dashboard-scroll := ScrollView {
             viewport-width: max(self.visible-width, dashboard.preferred-width);
             viewport-height: max(self.visible-height, dashboard.preferred-height);
 
@@ -103,13 +188,13 @@ export component AppWindow inherits Window {
                     VerticalBox {
                         spacing: 4px;
                         Text {
-                            text: "Indoor Cycling";
+                            text: root.workout-name;
                             color: #17202a;
                             font-size: 30px;
                             font-weight: 700;
                         }
                         Text {
-                            text: root.workout-name + " - " + root.ride-status;
+                            text: root.ride-status;
                             color: #53616f;
                             font-size: 16px;
                         }
@@ -235,7 +320,165 @@ export component AppWindow inherits Window {
             }
         }
 
-        Rectangle {
+        if root.current-page == 1 : devices-scroll := ScrollView {
+            viewport-width: max(self.visible-width, devices-content.preferred-width);
+            viewport-height: max(self.visible-height, devices-content.preferred-height);
+
+            devices-content := VerticalBox {
+                width: devices-scroll.viewport-width;
+                padding: 24px;
+                spacing: 18px;
+
+                Text {
+                    text: "Bluetooth Devices";
+                    color: #17202a;
+                    font-size: 30px;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Search for FTMS trainers and Bluetooth heart rate monitors.";
+                    color: #53616f;
+                    font-size: 16px;
+                }
+
+                HorizontalBox {
+                    spacing: 16px;
+
+                    ActionButton {
+                        text: root.device-scan-running ? "Scanning..." : "Scan for devices";
+                        enabled: root.device-scan-available && !root.device-scan-running;
+                        max-width: 190px;
+                        clicked => { root.scan-devices(); }
+                    }
+
+                    Text {
+                        text: root.device-scan-status;
+                        color: root.device-scan-error ? #be123c : #53616f;
+                        font-size: 15px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    background: white;
+                    border-color: root.heart-rate-connection-error ? #be123c : #d8dde3;
+                    border-width: 1px;
+                    border-radius: 8px;
+                    min-height: 78px;
+
+                    HorizontalBox {
+                        padding: 16px;
+                        spacing: 18px;
+
+                        VerticalBox {
+                            spacing: 5px;
+
+                            Text {
+                                text: "Heart Rate";
+                                color: #53616f;
+                                font-size: 14px;
+                            }
+
+                            Text {
+                                text: root.heart-rate-connection-status;
+                                color: root.heart-rate-connection-error ? #be123c : #17202a;
+                                font-size: 16px;
+                                font-weight: 600;
+                            }
+                        }
+
+                        Text {
+                            text: root.live-heart-rate-bpm > 0
+                                ? root.live-heart-rate-bpm + " bpm"
+                                : "-- bpm";
+                            color: #be123c;
+                            font-size: 26px;
+                            font-weight: 700;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                            min-width: 120px;
+                        }
+                    }
+                }
+
+                if root.discovered-devices.length == 0 : Rectangle {
+                    background: white;
+                    border-color: #d8dde3;
+                    border-width: 1px;
+                    border-radius: 8px;
+                    min-height: 120px;
+
+                    Text {
+                        text: root.device-scan-running
+                            ? "Listening for nearby Bluetooth devices..."
+                            : "No compatible devices found yet.";
+                        color: #53616f;
+                        font-size: 16px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                for device in root.discovered-devices : Rectangle {
+                    background: white;
+                    border-color: #d8dde3;
+                    border-width: 1px;
+                    border-radius: 8px;
+                    min-height: 82px;
+
+                    HorizontalBox {
+                        padding: 16px;
+                        spacing: 18px;
+
+                        VerticalBox {
+                            spacing: 6px;
+
+                            Text {
+                                text: device.name;
+                                color: #17202a;
+                                font-size: 18px;
+                                font-weight: 700;
+                            }
+
+                            Text {
+                                text: device.kind;
+                                color: #53616f;
+                                font-size: 14px;
+                            }
+                        }
+
+                        Text {
+                            text: device.signal;
+                            color: #53616f;
+                            font-size: 14px;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                            min-width: 100px;
+                        }
+
+                        if device.supports-heart-rate : ActionButton {
+                            text: root.connected-heart-rate-id == device.id
+                                ? "Disconnect"
+                                : root.connecting-heart-rate-id == device.id
+                                    ? "Connecting..."
+                                    : "Connect";
+                            enabled: root.connecting-heart-rate-id == "";
+                            max-width: 130px;
+                            clicked => {
+                                if root.connected-heart-rate-id == device.id {
+                                    root.disconnect-heart-rate();
+                                } else if root.connecting-heart-rate-id == "" {
+                                    root.connect-heart-rate(device.id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.current-page == 0 : Rectangle {
             min-height: 64px;
             max-height: 64px;
             background: #f7f8fa;
