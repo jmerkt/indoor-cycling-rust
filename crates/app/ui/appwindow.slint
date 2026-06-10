@@ -3,9 +3,12 @@ import { ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
 export struct DeviceListItem {
     id: string,
     name: string,
-    kind: string,
+    capabilities: string,
     signal: string,
+    supports-power: bool,
     supports-heart-rate: bool,
+    supports-cadence: bool,
+    supports-smart-trainer: bool,
 }
 
 component ActionButton inherits Rectangle {
@@ -100,6 +103,59 @@ component MetricTile inherits Rectangle {
     }
 }
 
+component RoleStatus inherits Rectangle {
+    in property <string> label;
+    in property <string> status;
+    in property <string> value;
+    in property <bool> error;
+    in property <bool> connected;
+    callback disconnect();
+
+    background: white;
+    border-color: root.error ? #be123c : #d8dde3;
+    border-width: 1px;
+    border-radius: 8px;
+    min-height: 68px;
+
+    HorizontalBox {
+        padding: 14px;
+        spacing: 16px;
+
+        VerticalBox {
+            spacing: 4px;
+
+            Text {
+                text: root.label;
+                color: #53616f;
+                font-size: 13px;
+            }
+
+            Text {
+                text: root.status;
+                color: root.error ? #be123c : #17202a;
+                font-size: 15px;
+                font-weight: 600;
+            }
+        }
+
+        Text {
+            text: root.value;
+            color: #0f766e;
+            font-size: 22px;
+            font-weight: 700;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            min-width: 110px;
+        }
+
+        if root.connected : ActionButton {
+            text: "Disconnect";
+            max-width: 110px;
+            clicked => { root.disconnect(); }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     title: "Indoor Cycling";
     width: 900px;
@@ -119,18 +175,41 @@ export component AppWindow inherits Window {
     in property <bool> device-scan-running: false;
     in property <bool> device-scan-error: false;
     in property <bool> device-scan-available: true;
+    in property <string> connected-power-id;
+    in property <string> connecting-power-id;
+    in property <string> power-connection-status: "No primary power source connected";
+    in property <bool> power-connection-error: false;
+    in property <int> live-power-watts: 0;
+
+    in property <string> connected-secondary-power-id;
+    in property <string> connecting-secondary-power-id;
+    in property <string> secondary-power-connection-status: "No secondary power source connected";
+    in property <bool> secondary-power-connection-error: false;
+    in property <int> live-secondary-power-watts: 0;
+
     in property <string> connected-heart-rate-id;
     in property <string> connecting-heart-rate-id;
     in property <string> heart-rate-connection-status: "No heart rate monitor connected";
     in property <bool> heart-rate-connection-error: false;
     in property <int> live-heart-rate-bpm: 0;
 
+    in property <string> connected-cadence-id;
+    in property <string> connecting-cadence-id;
+    in property <string> cadence-connection-status: "No cadence source connected";
+    in property <bool> cadence-connection-error: false;
+    in property <int> live-cadence-rpm: 0;
+
+    in property <string> connected-smart-trainer-id;
+    in property <string> connecting-smart-trainer-id;
+    in property <string> smart-trainer-connection-status: "No smart trainer connected";
+    in property <bool> smart-trainer-connection-error: false;
+
     callback start-ride();
     callback pause-ride();
     callback reset-ride();
     callback scan-devices();
-    callback connect-heart-rate(string);
-    callback disconnect-heart-rate();
+    callback connect-device(string, int);
+    callback disconnect-device(int);
 
     private property <int> current-page: 0;
 
@@ -337,7 +416,7 @@ export component AppWindow inherits Window {
                 }
 
                 Text {
-                    text: "Search for FTMS trainers and Bluetooth heart rate monitors.";
+                    text: "Assign Bluetooth devices to ride data and trainer roles.";
                     color: #53616f;
                     font-size: 16px;
                 }
@@ -360,46 +439,58 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                Rectangle {
-                    background: white;
-                    border-color: root.heart-rate-connection-error ? #be123c : #d8dde3;
-                    border-width: 1px;
-                    border-radius: 8px;
-                    min-height: 78px;
+                Text {
+                    text: "Assigned Roles";
+                    color: #17202a;
+                    font-size: 20px;
+                    font-weight: 700;
+                }
 
-                    HorizontalBox {
-                        padding: 16px;
-                        spacing: 18px;
+                RoleStatus {
+                    label: "Primary Power";
+                    status: root.power-connection-status;
+                    value: root.live-power-watts > 0 ? root.live-power-watts + " W" : "-- W";
+                    error: root.power-connection-error;
+                    connected: root.connected-power-id != "";
+                    disconnect => { root.disconnect-device(0); }
+                }
 
-                        VerticalBox {
-                            spacing: 5px;
+                RoleStatus {
+                    label: "Secondary Power";
+                    status: root.secondary-power-connection-status;
+                    value: root.live-secondary-power-watts > 0
+                        ? root.live-secondary-power-watts + " W"
+                        : "-- W";
+                    error: root.secondary-power-connection-error;
+                    connected: root.connected-secondary-power-id != "";
+                    disconnect => { root.disconnect-device(1); }
+                }
 
-                            Text {
-                                text: "Heart Rate";
-                                color: #53616f;
-                                font-size: 14px;
-                            }
+                RoleStatus {
+                    label: "Heart Rate";
+                    status: root.heart-rate-connection-status;
+                    value: root.live-heart-rate-bpm > 0 ? root.live-heart-rate-bpm + " bpm" : "-- bpm";
+                    error: root.heart-rate-connection-error;
+                    connected: root.connected-heart-rate-id != "";
+                    disconnect => { root.disconnect-device(2); }
+                }
 
-                            Text {
-                                text: root.heart-rate-connection-status;
-                                color: root.heart-rate-connection-error ? #be123c : #17202a;
-                                font-size: 16px;
-                                font-weight: 600;
-                            }
-                        }
+                RoleStatus {
+                    label: "RPM";
+                    status: root.cadence-connection-status;
+                    value: root.live-cadence-rpm > 0 ? root.live-cadence-rpm + " rpm" : "-- rpm";
+                    error: root.cadence-connection-error;
+                    connected: root.connected-cadence-id != "";
+                    disconnect => { root.disconnect-device(3); }
+                }
 
-                        Text {
-                            text: root.live-heart-rate-bpm > 0
-                                ? root.live-heart-rate-bpm + " bpm"
-                                : "-- bpm";
-                            color: #be123c;
-                            font-size: 26px;
-                            font-weight: 700;
-                            horizontal-alignment: right;
-                            vertical-alignment: center;
-                            min-width: 120px;
-                        }
-                    }
+                RoleStatus {
+                    label: "Smart Trainer";
+                    status: root.smart-trainer-connection-status;
+                    value: root.connected-smart-trainer-id != "" ? "Connected" : "--";
+                    error: root.smart-trainer-connection-error;
+                    connected: root.connected-smart-trainer-id != "";
+                    disconnect => { root.disconnect-device(4); }
                 }
 
                 if root.discovered-devices.length == 0 : Rectangle {
@@ -425,51 +516,122 @@ export component AppWindow inherits Window {
                     border-color: #d8dde3;
                     border-width: 1px;
                     border-radius: 8px;
-                    min-height: 82px;
+                    min-height: 132px;
 
-                    HorizontalBox {
+                    VerticalBox {
                         padding: 16px;
-                        spacing: 18px;
+                        spacing: 12px;
 
-                        VerticalBox {
-                            spacing: 6px;
+                        HorizontalBox {
+                            spacing: 18px;
 
-                            Text {
-                                text: device.name;
-                                color: #17202a;
-                                font-size: 18px;
-                                font-weight: 700;
+                            VerticalBox {
+                                spacing: 6px;
+
+                                Text {
+                                    text: device.name;
+                                    color: #17202a;
+                                    font-size: 18px;
+                                    font-weight: 700;
+                                }
+
+                                Text {
+                                    text: device.capabilities;
+                                    color: #53616f;
+                                    font-size: 14px;
+                                }
                             }
 
                             Text {
-                                text: device.kind;
+                                text: device.signal;
                                 color: #53616f;
                                 font-size: 14px;
+                                horizontal-alignment: right;
+                                vertical-alignment: center;
+                                min-width: 100px;
                             }
                         }
 
-                        Text {
-                            text: device.signal;
-                            color: #53616f;
-                            font-size: 14px;
-                            horizontal-alignment: right;
-                            vertical-alignment: center;
-                            min-width: 100px;
-                        }
+                        HorizontalBox {
+                            spacing: 8px;
 
-                        if device.supports-heart-rate : ActionButton {
-                            text: root.connected-heart-rate-id == device.id
-                                ? "Disconnect"
-                                : root.connecting-heart-rate-id == device.id
-                                    ? "Connecting..."
-                                    : "Connect";
-                            enabled: root.connecting-heart-rate-id == "";
-                            max-width: 130px;
-                            clicked => {
-                                if root.connected-heart-rate-id == device.id {
-                                    root.disconnect-heart-rate();
-                                } else if root.connecting-heart-rate-id == "" {
-                                    root.connect-heart-rate(device.id);
+                            if device.supports-power : ActionButton {
+                                text: root.connected-power-id == device.id
+                                    ? "Disconnect Power"
+                                    : root.connecting-power-id == device.id
+                                        ? "Connecting..."
+                                        : "Primary Power";
+                                enabled: root.connecting-power-id == "";
+                                clicked => {
+                                    if root.connected-power-id == device.id {
+                                        root.disconnect-device(0);
+                                    } else if root.connecting-power-id == "" {
+                                        root.connect-device(device.id, 0);
+                                    }
+                                }
+                            }
+
+                            if device.supports-power : ActionButton {
+                                text: root.connected-secondary-power-id == device.id
+                                    ? "Disconnect Secondary"
+                                    : root.connecting-secondary-power-id == device.id
+                                        ? "Connecting..."
+                                        : "Secondary Power";
+                                enabled: root.connecting-secondary-power-id == "";
+                                clicked => {
+                                    if root.connected-secondary-power-id == device.id {
+                                        root.disconnect-device(1);
+                                    } else if root.connecting-secondary-power-id == "" {
+                                        root.connect-device(device.id, 1);
+                                    }
+                                }
+                            }
+
+                            if device.supports-heart-rate : ActionButton {
+                                text: root.connected-heart-rate-id == device.id
+                                    ? "Disconnect HR"
+                                    : root.connecting-heart-rate-id == device.id
+                                        ? "Connecting..."
+                                        : "Heart Rate";
+                                enabled: root.connecting-heart-rate-id == "";
+                                clicked => {
+                                    if root.connected-heart-rate-id == device.id {
+                                        root.disconnect-device(2);
+                                    } else if root.connecting-heart-rate-id == "" {
+                                        root.connect-device(device.id, 2);
+                                    }
+                                }
+                            }
+
+                            if device.supports-cadence : ActionButton {
+                                text: root.connected-cadence-id == device.id
+                                    ? "Disconnect RPM"
+                                    : root.connecting-cadence-id == device.id
+                                        ? "Connecting..."
+                                        : "RPM";
+                                enabled: root.connecting-cadence-id == "";
+                                clicked => {
+                                    if root.connected-cadence-id == device.id {
+                                        root.disconnect-device(3);
+                                    } else if root.connecting-cadence-id == "" {
+                                        root.connect-device(device.id, 3);
+                                    }
+                                }
+                            }
+
+                            if device.supports-smart-trainer : ActionButton {
+                                text: root.connected-smart-trainer-id == device.id
+                                    ? "Disconnect Trainer"
+                                    : root.connecting-smart-trainer-id == device.id
+                                        ? "Connecting..."
+                                        : "Smart Trainer";
+                                enabled: root.connecting-smart-trainer-id == "";
+                                clicked => {
+                                    if root.connected-smart-trainer-id == device.id {
+                                        root.disconnect-device(4);
+                                    } else if root.connecting-smart-trainer-id == "" {
+                                        root.connect-device(device.id, 4);
+                                    }
                                 }
                             }
                         }

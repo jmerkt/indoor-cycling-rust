@@ -2,7 +2,10 @@ mod bluetooth;
 mod discovery;
 
 pub use bluetooth::{BluetoothDeviceService, BluetoothScanner};
-pub use discovery::{DeviceId, DeviceKind, DiscoveredDevice, DiscoveryCommand, DiscoveryEvent};
+pub use discovery::{
+    DeviceCapabilities, DeviceId, DeviceMeasurement, DeviceRole, DiscoveredDevice,
+    DiscoveryCommand, DiscoveryEvent,
+};
 
 use indoor_cycling_core::RideSample;
 

@@ -19,23 +19,35 @@ impl std::fmt::Display for DeviceId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceKind {
-    Trainer,
-    HeartRateMonitor,
-    TrainerAndHeartRateMonitor,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DeviceRole {
+    PowerSource,
+    SecondaryPowerSource,
+    HeartRate,
+    Cadence,
+    SmartTrainer,
 }
 
-impl DeviceKind {
-    pub fn is_trainer(self) -> bool {
-        matches!(self, Self::Trainer | Self::TrainerAndHeartRateMonitor)
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeviceCapabilities {
+    pub power: bool,
+    pub heart_rate: bool,
+    pub cadence: bool,
+    pub smart_trainer: bool,
+}
+
+impl DeviceCapabilities {
+    pub fn supports(self, role: DeviceRole) -> bool {
+        match role {
+            DeviceRole::PowerSource | DeviceRole::SecondaryPowerSource => self.power,
+            DeviceRole::HeartRate => self.heart_rate,
+            DeviceRole::Cadence => self.cadence,
+            DeviceRole::SmartTrainer => self.smart_trainer,
+        }
     }
 
-    pub fn is_heart_rate_monitor(self) -> bool {
-        matches!(
-            self,
-            Self::HeartRateMonitor | Self::TrainerAndHeartRateMonitor
-        )
+    pub fn is_empty(self) -> bool {
+        !self.power && !self.heart_rate && !self.cadence && !self.smart_trainer
     }
 }
 
@@ -43,16 +55,30 @@ impl DeviceKind {
 pub struct DiscoveredDevice {
     pub id: DeviceId,
     pub name: String,
-    pub kind: DeviceKind,
+    pub capabilities: DeviceCapabilities,
     pub signal_strength: Option<i16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiscoveryCommand {
-    Scan { duration: Duration },
-    ConnectHeartRate { device_id: DeviceId },
-    DisconnectHeartRate,
+    Scan {
+        duration: Duration,
+    },
+    Connect {
+        role: DeviceRole,
+        device_id: DeviceId,
+    },
+    Disconnect {
+        role: DeviceRole,
+    },
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceMeasurement {
+    PowerWatts(i16),
+    HeartRateBpm(u16),
+    CadenceRpm(u16),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,10 +86,25 @@ pub enum DiscoveryEvent {
     ScanStarted,
     DeviceDiscovered(DiscoveredDevice),
     ScanFinished,
-    HeartRateConnecting(DeviceId),
-    HeartRateConnected(DeviceId),
-    HeartRateMeasurement(u16),
-    HeartRateDisconnected(DeviceId),
-    HeartRateError(String),
+    RoleConnecting {
+        role: DeviceRole,
+        device_id: DeviceId,
+    },
+    RoleConnected {
+        role: DeviceRole,
+        device_id: DeviceId,
+    },
+    Measurement {
+        role: DeviceRole,
+        measurement: DeviceMeasurement,
+    },
+    RoleDisconnected {
+        role: DeviceRole,
+        device_id: DeviceId,
+    },
+    RoleError {
+        role: DeviceRole,
+        message: String,
+    },
     Error(String),
 }

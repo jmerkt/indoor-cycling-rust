@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use btleplug::api::Peripheral as _;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use tokio::sync::mpsc::{self as tokio_mpsc, UnboundedReceiver, UnboundedSender};
 
-use crate::bluetooth::heart_rate::{self, HeartRateConnection};
-use crate::{BluetoothScanner, DeviceError, DeviceId, DiscoveryCommand, DiscoveryEvent};
+use crate::bluetooth::connection::{self, DeviceConnection};
+use crate::{
+    BluetoothScanner, DeviceError, DeviceId, DeviceRole, DiscoveryCommand, DiscoveryEvent,
+};
 
 pub struct BluetoothDeviceService {
     commands: UnboundedSender<DiscoveryCommand>,
@@ -35,12 +38,12 @@ impl BluetoothDeviceService {
         self.send(DiscoveryCommand::Scan { duration })
     }
 
-    pub fn connect_heart_rate(&self, device_id: DeviceId) -> Result<(), DeviceError> {
-        self.send(DiscoveryCommand::ConnectHeartRate { device_id })
+    pub fn connect(&self, role: DeviceRole, device_id: DeviceId) -> Result<(), DeviceError> {
+        self.send(DiscoveryCommand::Connect { role, device_id })
     }
 
-    pub fn disconnect_heart_rate(&self) -> Result<(), DeviceError> {
-        self.send(DiscoveryCommand::DisconnectHeartRate)
+    pub fn disconnect(&self, role: DeviceRole) -> Result<(), DeviceError> {
+        self.send(DiscoveryCommand::Disconnect { role })
     }
 
     pub fn try_recv(&self) -> Result<DiscoveryEvent, mpsc::TryRecvError> {
@@ -92,60 +95,87 @@ async fn run_service(
     events: std::sync::mpsc::Sender<DiscoveryEvent>,
 ) {
     let scanner = BluetoothScanner::new();
-    let mut heart_rate_connection: Option<HeartRateConnection> = None;
+    let mut connections = HashMap::<DeviceRole, DeviceConnection>::new();
 
     loop {
-        if let Some(connection) = heart_rate_connection.as_mut() {
+        if poll_notifications(&mut connections, &events) {
+            disconnect_all(&mut connections, &events).await;
+            return;
+        }
+
+        let command = if connections.is_empty() {
+            commands.recv().await
+        } else {
             tokio::select! {
-                command = commands.recv() => {
-                    let Some(command) = command else {
-                        disconnect(&mut heart_rate_connection, &events).await;
-                        return;
-                    };
-                    if handle_command(
-                        command,
-                        &scanner,
-                        &mut heart_rate_connection,
-                        &events,
-                    ).await {
-                        return;
-                    }
-                }
-                notification = connection.notifications.next() => {
-                    match notification {
-                        Some(notification) if notification.uuid == crate::bluetooth::uuids::HEART_RATE_MEASUREMENT => {
-                            if let Ok(value) = heart_rate::parse_measurement(&notification.value) {
-                                if events.send(DiscoveryEvent::HeartRateMeasurement(value)).is_err() {
-                                    return;
-                                }
-                            }
-                        }
-                        Some(_) => {}
-                        None => {
-                            let device_id = connection.device_id.clone();
-                            heart_rate_connection = None;
-                            if events.send(DiscoveryEvent::HeartRateDisconnected(device_id)).is_err() {
-                                return;
-                            }
-                        }
+                command = commands.recv() => command,
+                _ = tokio::time::sleep(Duration::from_millis(20)) => continue,
+            }
+        };
+
+        let Some(command) = command else {
+            disconnect_all(&mut connections, &events).await;
+            return;
+        };
+
+        if handle_command(command, &scanner, &mut connections, &events).await {
+            return;
+        }
+    }
+}
+
+fn poll_notifications(
+    connections: &mut HashMap<DeviceRole, DeviceConnection>,
+    events: &std::sync::mpsc::Sender<DiscoveryEvent>,
+) -> bool {
+    let roles: Vec<_> = connections.keys().copied().collect();
+    let mut disconnected = Vec::new();
+
+    for role in roles {
+        let Some(connection) = connections.get_mut(&role) else {
+            continue;
+        };
+        let notification = connection
+            .notifications
+            .as_mut()
+            .and_then(|notifications| notifications.next().now_or_never());
+
+        match notification {
+            Some(Some(notification)) => {
+                if let Ok(Some(measurement)) = connection.parse_notification(&notification) {
+                    if events
+                        .send(DiscoveryEvent::Measurement { role, measurement })
+                        .is_err()
+                    {
+                        return true;
                     }
                 }
             }
-        } else {
-            let Some(command) = commands.recv().await else {
-                return;
-            };
-            if handle_command(command, &scanner, &mut heart_rate_connection, &events).await {
-                return;
+            Some(None) => disconnected.push(role),
+            None => {}
+        }
+    }
+
+    for role in disconnected {
+        if let Some(connection) = connections.remove(&role) {
+            if events
+                .send(DiscoveryEvent::RoleDisconnected {
+                    role,
+                    device_id: connection.device_id,
+                })
+                .is_err()
+            {
+                return true;
             }
         }
     }
+
+    false
 }
 
 async fn handle_command(
     command: DiscoveryCommand,
     scanner: &BluetoothScanner,
-    heart_rate_connection: &mut Option<HeartRateConnection>,
+    connections: &mut HashMap<DeviceRole, DeviceConnection>,
     events: &std::sync::mpsc::Sender<DiscoveryEvent>,
 ) -> bool {
     match command {
@@ -177,49 +207,70 @@ async fn handle_command(
 
             events.send(DiscoveryEvent::ScanFinished).is_err()
         }
-        DiscoveryCommand::ConnectHeartRate { device_id } => {
-            disconnect(heart_rate_connection, events).await;
+        DiscoveryCommand::Connect { role, device_id } => {
+            disconnect_role(role, connections, events).await;
             if events
-                .send(DiscoveryEvent::HeartRateConnecting(device_id.clone()))
+                .send(DiscoveryEvent::RoleConnecting {
+                    role,
+                    device_id: device_id.clone(),
+                })
                 .is_err()
             {
                 return true;
             }
 
-            match heart_rate::connect(device_id.clone()).await {
+            match connection::connect(role, device_id.clone()).await {
                 Ok(connection) => {
-                    *heart_rate_connection = Some(connection);
+                    connections.insert(role, connection);
                     events
-                        .send(DiscoveryEvent::HeartRateConnected(device_id))
+                        .send(DiscoveryEvent::RoleConnected { role, device_id })
                         .is_err()
                 }
                 Err(error) => events
-                    .send(DiscoveryEvent::HeartRateError(format!(
-                        "heart rate connection failed: {error}"
-                    )))
+                    .send(DiscoveryEvent::RoleError {
+                        role,
+                        message: error.to_string(),
+                    })
                     .is_err(),
             }
         }
-        DiscoveryCommand::DisconnectHeartRate => {
-            disconnect(heart_rate_connection, events).await;
+        DiscoveryCommand::Disconnect { role } => {
+            disconnect_role(role, connections, events).await;
             false
         }
         DiscoveryCommand::Shutdown => {
-            disconnect(heart_rate_connection, events).await;
+            disconnect_all(connections, events).await;
             true
         }
     }
 }
 
-async fn disconnect(
-    connection: &mut Option<HeartRateConnection>,
+async fn disconnect_role(
+    role: DeviceRole,
+    connections: &mut HashMap<DeviceRole, DeviceConnection>,
     events: &std::sync::mpsc::Sender<DiscoveryEvent>,
 ) {
-    let Some(connection) = connection.take() else {
+    let Some(connection) = connections.remove(&role) else {
         return;
     };
 
     let device_id = connection.device_id;
-    let _ = connection.peripheral.disconnect().await;
-    let _ = events.send(DiscoveryEvent::HeartRateDisconnected(device_id));
+    let shared_by_another_role = connections
+        .values()
+        .any(|other| other.device_id == device_id);
+    if !shared_by_another_role {
+        let _ = connection.peripheral.disconnect().await;
+    }
+
+    let _ = events.send(DiscoveryEvent::RoleDisconnected { role, device_id });
+}
+
+async fn disconnect_all(
+    connections: &mut HashMap<DeviceRole, DeviceConnection>,
+    events: &std::sync::mpsc::Sender<DiscoveryEvent>,
+) {
+    let roles: Vec<_> = connections.keys().copied().collect();
+    for role in roles {
+        disconnect_role(role, connections, events).await;
+    }
 }

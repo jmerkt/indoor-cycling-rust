@@ -6,8 +6,11 @@ use btleplug::platform::Manager;
 use tokio::time::sleep;
 use uuid::Uuid;
 
-use crate::bluetooth::uuids::{FITNESS_MACHINE_SERVICE, HEART_RATE_SERVICE};
-use crate::{DeviceError, DeviceId, DeviceKind, DiscoveredDevice};
+use crate::bluetooth::uuids::{
+    CYCLING_POWER_SERVICE, CYCLING_SPEED_AND_CADENCE_SERVICE, FITNESS_MACHINE_SERVICE,
+    HEART_RATE_SERVICE,
+};
+use crate::{DeviceCapabilities, DeviceError, DeviceId, DiscoveredDevice};
 
 #[derive(Debug, Clone, Default)]
 pub struct BluetoothScanner;
@@ -54,9 +57,10 @@ impl BluetoothScanner {
                     continue;
                 };
 
-                let Some(kind) = classify_services(&properties.services) else {
+                let capabilities = classify_services(&properties.services);
+                if capabilities.is_empty() {
                     continue;
-                };
+                }
 
                 let id = DeviceId::new(peripheral.id().to_string());
                 let name = properties
@@ -67,7 +71,7 @@ impl BluetoothScanner {
                     DiscoveredDevice {
                         id,
                         name,
-                        kind,
+                        capabilities,
                         signal_strength: properties.rssi,
                     },
                 );
@@ -90,15 +94,16 @@ impl BluetoothScanner {
     }
 }
 
-fn classify_services(services: &[Uuid]) -> Option<DeviceKind> {
-    let is_trainer = services.contains(&FITNESS_MACHINE_SERVICE);
-    let is_heart_rate_monitor = services.contains(&HEART_RATE_SERVICE);
+fn classify_services(services: &[Uuid]) -> DeviceCapabilities {
+    let fitness_machine = services.contains(&FITNESS_MACHINE_SERVICE);
+    let cycling_power = services.contains(&CYCLING_POWER_SERVICE);
+    let cycling_speed_and_cadence = services.contains(&CYCLING_SPEED_AND_CADENCE_SERVICE);
 
-    match (is_trainer, is_heart_rate_monitor) {
-        (true, true) => Some(DeviceKind::TrainerAndHeartRateMonitor),
-        (true, false) => Some(DeviceKind::Trainer),
-        (false, true) => Some(DeviceKind::HeartRateMonitor),
-        (false, false) => None,
+    DeviceCapabilities {
+        power: fitness_machine || cycling_power,
+        heart_rate: services.contains(&HEART_RATE_SERVICE),
+        cadence: fitness_machine || cycling_power || cycling_speed_and_cadence,
+        smart_trainer: fitness_machine,
     }
 }
 
@@ -110,16 +115,35 @@ mod tests {
     fn classifies_supported_services() {
         assert_eq!(
             classify_services(&[FITNESS_MACHINE_SERVICE]),
-            Some(DeviceKind::Trainer)
+            DeviceCapabilities {
+                power: true,
+                cadence: true,
+                smart_trainer: true,
+                ..DeviceCapabilities::default()
+            }
         );
         assert_eq!(
             classify_services(&[HEART_RATE_SERVICE]),
-            Some(DeviceKind::HeartRateMonitor)
+            DeviceCapabilities {
+                heart_rate: true,
+                ..DeviceCapabilities::default()
+            }
         );
         assert_eq!(
-            classify_services(&[FITNESS_MACHINE_SERVICE, HEART_RATE_SERVICE]),
-            Some(DeviceKind::TrainerAndHeartRateMonitor)
+            classify_services(&[CYCLING_POWER_SERVICE]),
+            DeviceCapabilities {
+                power: true,
+                cadence: true,
+                ..DeviceCapabilities::default()
+            }
         );
-        assert_eq!(classify_services(&[Uuid::nil()]), None);
+        assert_eq!(
+            classify_services(&[CYCLING_SPEED_AND_CADENCE_SERVICE]),
+            DeviceCapabilities {
+                cadence: true,
+                ..DeviceCapabilities::default()
+            }
+        );
+        assert!(classify_services(&[Uuid::nil()]).is_empty());
     }
 }

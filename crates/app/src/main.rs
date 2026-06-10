@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use indoor_cycling_core::{RideRecorder, Workout, WorkoutEngine, WorkoutPhase};
 use indoor_cycling_devices::{
-    BluetoothDeviceService, DeviceId, DeviceKind, DiscoveryEvent, SimulatedTrainer, TrainerDevice,
+    BluetoothDeviceService, DeviceCapabilities, DeviceId, DeviceMeasurement, DeviceRole,
+    DiscoveryEvent, SimulatedTrainer, TrainerDevice,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 
@@ -14,7 +15,10 @@ struct AppState {
     recorder: RideRecorder,
     workout: WorkoutEngine,
     trainer: SimulatedTrainer,
+    external_power_watts: Option<i16>,
+    secondary_power_watts: Option<i16>,
     external_heart_rate_bpm: Option<u16>,
+    external_cadence_rpm: Option<u16>,
     running: bool,
 }
 
@@ -27,9 +31,21 @@ impl AppState {
             recorder: RideRecorder::new(),
             workout: WorkoutEngine::new(Workout::endurance_sample()),
             trainer,
+            external_power_watts: None,
+            secondary_power_watts: None,
             external_heart_rate_bpm: None,
+            external_cadence_rpm: None,
             running: false,
         }
+    }
+
+    fn reset_ride(&mut self) {
+        let mut trainer = SimulatedTrainer::new();
+        trainer.connect().expect("simulated trainer should connect");
+        self.recorder = RideRecorder::new();
+        self.workout = WorkoutEngine::new(Workout::endurance_sample());
+        self.trainer = trainer;
+        self.running = false;
     }
 }
 
@@ -75,7 +91,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = Rc::clone(&state);
         window.on_reset_ride(move || {
             let mut state = state.borrow_mut();
-            *state = AppState::new();
+            state.reset_ride();
             if let Some(window) = window_weak.upgrade() {
                 render(&window, &state);
                 window.set_ride_status("Ready".into());
@@ -120,30 +136,31 @@ fn main() -> Result<(), slint::PlatformError> {
 
         let service = Rc::clone(bluetooth_service);
         let window_weak = window.as_weak();
-        window.on_connect_heart_rate(move |device_id| {
+        window.on_connect_device(move |device_id, role_index| {
+            let Some(role) = role_from_index(role_index) else {
+                return;
+            };
             let device_id = DeviceId::new(device_id.as_str());
             if let Some(window) = window_weak.upgrade() {
-                window.set_connecting_heart_rate_id(device_id.as_str().into());
-                window.set_heart_rate_connection_error(false);
-                window.set_heart_rate_connection_status("Connecting...".into());
+                set_role_connecting(&window, role, device_id.as_str());
             }
 
-            if let Err(error) = service.connect_heart_rate(device_id) {
+            if let Err(error) = service.connect(role, device_id) {
                 if let Some(window) = window_weak.upgrade() {
-                    window.set_connecting_heart_rate_id("".into());
-                    window.set_heart_rate_connection_error(true);
-                    window.set_heart_rate_connection_status(format!("Error: {error}").into());
+                    set_role_error(&window, role, &error.to_string());
                 }
             }
         });
 
         let service = Rc::clone(bluetooth_service);
         let window_weak = window.as_weak();
-        window.on_disconnect_heart_rate(move || {
-            if let Err(error) = service.disconnect_heart_rate() {
+        window.on_disconnect_device(move |role_index| {
+            let Some(role) = role_from_index(role_index) else {
+                return;
+            };
+            if let Err(error) = service.disconnect(role) {
                 if let Some(window) = window_weak.upgrade() {
-                    window.set_heart_rate_connection_error(true);
-                    window.set_heart_rate_connection_status(format!("Error: {error}").into());
+                    set_role_error(&window, role, &error.to_string());
                 }
             }
         });
@@ -183,13 +200,16 @@ fn handle_discovery_event(
             window.set_device_scan_status("Scanning for compatible devices...".into());
         }
         DiscoveryEvent::DeviceDiscovered(device) => {
-            let supports_heart_rate = device.kind.is_heart_rate_monitor();
+            let capabilities = device.capabilities;
             devices.push(DeviceListItem {
                 id: SharedString::from(device.id.as_str()),
                 name: SharedString::from(device.name),
-                kind: SharedString::from(device_kind_label(device.kind)),
+                capabilities: SharedString::from(capabilities_label(capabilities)),
                 signal: SharedString::from(signal_label(device.signal_strength)),
-                supports_heart_rate,
+                supports_power: capabilities.power,
+                supports_heart_rate: capabilities.heart_rate,
+                supports_cadence: capabilities.cadence,
+                supports_smart_trainer: capabilities.smart_trainer,
             });
         }
         DiscoveryEvent::ScanFinished => {
@@ -211,55 +231,238 @@ fn handle_discovery_event(
             window.set_device_scan_running(false);
             window.set_device_scan_status(format!("Error: {error}").into());
         }
-        DiscoveryEvent::HeartRateConnecting(device_id) => {
-            window.set_connecting_heart_rate_id(device_id.as_str().into());
-            window.set_heart_rate_connection_error(false);
-            window.set_heart_rate_connection_status("Connecting...".into());
+        DiscoveryEvent::RoleConnecting { role, device_id } => {
+            set_role_connecting(window, role, device_id.as_str());
         }
-        DiscoveryEvent::HeartRateConnected(device_id) => {
-            window.set_connecting_heart_rate_id("".into());
-            window.set_connected_heart_rate_id(device_id.as_str().into());
-            window.set_heart_rate_connection_error(false);
-            window.set_heart_rate_connection_status("Connected, waiting for data...".into());
+        DiscoveryEvent::RoleConnected { role, device_id } => {
+            set_role_connected(window, role, device_id.as_str());
         }
-        DiscoveryEvent::HeartRateMeasurement(value) => {
-            state.borrow_mut().external_heart_rate_bpm = Some(value);
-            window.set_live_heart_rate_bpm(i32::from(value));
-            window.set_heart_rate_bpm(i32::from(value));
-            window.set_heart_rate_connection_status("Connected and receiving data".into());
+        DiscoveryEvent::Measurement { role, measurement } => {
+            handle_measurement(window, state, role, measurement);
         }
-        DiscoveryEvent::HeartRateDisconnected(_) => {
-            state.borrow_mut().external_heart_rate_bpm = None;
-            window.set_connecting_heart_rate_id("".into());
-            window.set_connected_heart_rate_id("".into());
-            window.set_live_heart_rate_bpm(0);
-            window.set_heart_rate_connection_error(false);
-            window.set_heart_rate_connection_status("No heart rate monitor connected".into());
+        DiscoveryEvent::RoleDisconnected { role, .. } => {
+            clear_role_measurement(state, role);
+            set_role_disconnected(window, role);
             render(window, &state.borrow());
         }
-        DiscoveryEvent::HeartRateError(error) => {
-            state.borrow_mut().external_heart_rate_bpm = None;
-            window.set_connecting_heart_rate_id("".into());
-            window.set_connected_heart_rate_id("".into());
-            window.set_live_heart_rate_bpm(0);
-            window.set_heart_rate_connection_error(true);
-            window.set_heart_rate_connection_status(format!("Error: {error}").into());
+        DiscoveryEvent::RoleError { role, message } => {
+            clear_role_measurement(state, role);
+            set_role_error(window, role, &message);
+            render(window, &state.borrow());
         }
     }
 }
 
-fn device_kind_label(kind: DeviceKind) -> &'static str {
-    match kind {
-        DeviceKind::Trainer => "FTMS trainer",
-        DeviceKind::HeartRateMonitor => "Heart rate monitor",
-        DeviceKind::TrainerAndHeartRateMonitor => "FTMS trainer and heart rate monitor",
+fn capabilities_label(capabilities: DeviceCapabilities) -> String {
+    let mut labels = Vec::new();
+    if capabilities.power {
+        labels.push("Power");
     }
+    if capabilities.heart_rate {
+        labels.push("Heart rate");
+    }
+    if capabilities.cadence {
+        labels.push("RPM");
+    }
+    if capabilities.smart_trainer {
+        labels.push("Smart trainer");
+    }
+    labels.join(" / ")
 }
 
 fn signal_label(signal_strength: Option<i16>) -> String {
     signal_strength
         .map(|rssi| format!("{rssi} dBm"))
         .unwrap_or_else(|| "Signal unknown".to_owned())
+}
+
+fn role_from_index(index: i32) -> Option<DeviceRole> {
+    match index {
+        0 => Some(DeviceRole::PowerSource),
+        1 => Some(DeviceRole::SecondaryPowerSource),
+        2 => Some(DeviceRole::HeartRate),
+        3 => Some(DeviceRole::Cadence),
+        4 => Some(DeviceRole::SmartTrainer),
+        _ => None,
+    }
+}
+
+fn set_role_connecting(window: &AppWindow, role: DeviceRole, device_id: &str) {
+    match role {
+        DeviceRole::PowerSource => {
+            window.set_connecting_power_id(device_id.into());
+            window.set_power_connection_error(false);
+            window.set_power_connection_status("Connecting...".into());
+        }
+        DeviceRole::SecondaryPowerSource => {
+            window.set_connecting_secondary_power_id(device_id.into());
+            window.set_secondary_power_connection_error(false);
+            window.set_secondary_power_connection_status("Connecting...".into());
+        }
+        DeviceRole::HeartRate => {
+            window.set_connecting_heart_rate_id(device_id.into());
+            window.set_heart_rate_connection_error(false);
+            window.set_heart_rate_connection_status("Connecting...".into());
+        }
+        DeviceRole::Cadence => {
+            window.set_connecting_cadence_id(device_id.into());
+            window.set_cadence_connection_error(false);
+            window.set_cadence_connection_status("Connecting...".into());
+        }
+        DeviceRole::SmartTrainer => {
+            window.set_connecting_smart_trainer_id(device_id.into());
+            window.set_smart_trainer_connection_error(false);
+            window.set_smart_trainer_connection_status("Connecting...".into());
+        }
+    }
+}
+
+fn set_role_connected(window: &AppWindow, role: DeviceRole, device_id: &str) {
+    match role {
+        DeviceRole::PowerSource => {
+            window.set_connecting_power_id("".into());
+            window.set_connected_power_id(device_id.into());
+            window.set_power_connection_error(false);
+            window.set_power_connection_status("Connected, waiting for data...".into());
+        }
+        DeviceRole::SecondaryPowerSource => {
+            window.set_connecting_secondary_power_id("".into());
+            window.set_connected_secondary_power_id(device_id.into());
+            window.set_secondary_power_connection_error(false);
+            window.set_secondary_power_connection_status("Connected, waiting for data...".into());
+        }
+        DeviceRole::HeartRate => {
+            window.set_connecting_heart_rate_id("".into());
+            window.set_connected_heart_rate_id(device_id.into());
+            window.set_heart_rate_connection_error(false);
+            window.set_heart_rate_connection_status("Connected, waiting for data...".into());
+        }
+        DeviceRole::Cadence => {
+            window.set_connecting_cadence_id("".into());
+            window.set_connected_cadence_id(device_id.into());
+            window.set_cadence_connection_error(false);
+            window.set_cadence_connection_status("Connected, waiting for data...".into());
+        }
+        DeviceRole::SmartTrainer => {
+            window.set_connecting_smart_trainer_id("".into());
+            window.set_connected_smart_trainer_id(device_id.into());
+            window.set_smart_trainer_connection_error(false);
+            window.set_smart_trainer_connection_status("Connected".into());
+        }
+    }
+}
+
+fn set_role_disconnected(window: &AppWindow, role: DeviceRole) {
+    match role {
+        DeviceRole::PowerSource => {
+            window.set_connecting_power_id("".into());
+            window.set_connected_power_id("".into());
+            window.set_live_power_watts(0);
+            window.set_power_connection_error(false);
+            window.set_power_connection_status("No primary power source connected".into());
+        }
+        DeviceRole::SecondaryPowerSource => {
+            window.set_connecting_secondary_power_id("".into());
+            window.set_connected_secondary_power_id("".into());
+            window.set_live_secondary_power_watts(0);
+            window.set_secondary_power_connection_error(false);
+            window.set_secondary_power_connection_status(
+                "No secondary power source connected".into(),
+            );
+        }
+        DeviceRole::HeartRate => {
+            window.set_connecting_heart_rate_id("".into());
+            window.set_connected_heart_rate_id("".into());
+            window.set_live_heart_rate_bpm(0);
+            window.set_heart_rate_connection_error(false);
+            window.set_heart_rate_connection_status("No heart rate monitor connected".into());
+        }
+        DeviceRole::Cadence => {
+            window.set_connecting_cadence_id("".into());
+            window.set_connected_cadence_id("".into());
+            window.set_live_cadence_rpm(0);
+            window.set_cadence_connection_error(false);
+            window.set_cadence_connection_status("No cadence source connected".into());
+        }
+        DeviceRole::SmartTrainer => {
+            window.set_connecting_smart_trainer_id("".into());
+            window.set_connected_smart_trainer_id("".into());
+            window.set_smart_trainer_connection_error(false);
+            window.set_smart_trainer_connection_status("No smart trainer connected".into());
+        }
+    }
+}
+
+fn set_role_error(window: &AppWindow, role: DeviceRole, message: &str) {
+    set_role_disconnected(window, role);
+    let status = format!("Error: {message}");
+    match role {
+        DeviceRole::PowerSource => {
+            window.set_power_connection_error(true);
+            window.set_power_connection_status(status.into());
+        }
+        DeviceRole::SecondaryPowerSource => {
+            window.set_secondary_power_connection_error(true);
+            window.set_secondary_power_connection_status(status.into());
+        }
+        DeviceRole::HeartRate => {
+            window.set_heart_rate_connection_error(true);
+            window.set_heart_rate_connection_status(status.into());
+        }
+        DeviceRole::Cadence => {
+            window.set_cadence_connection_error(true);
+            window.set_cadence_connection_status(status.into());
+        }
+        DeviceRole::SmartTrainer => {
+            window.set_smart_trainer_connection_error(true);
+            window.set_smart_trainer_connection_status(status.into());
+        }
+    }
+}
+
+fn handle_measurement(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    role: DeviceRole,
+    measurement: DeviceMeasurement,
+) {
+    match (role, measurement) {
+        (DeviceRole::PowerSource, DeviceMeasurement::PowerWatts(value)) => {
+            state.borrow_mut().external_power_watts = Some(value);
+            window.set_live_power_watts(i32::from(value.max(0)));
+            window.set_power_watts(i32::from(value.max(0)));
+            window.set_power_connection_status("Connected and receiving data".into());
+        }
+        (DeviceRole::SecondaryPowerSource, DeviceMeasurement::PowerWatts(value)) => {
+            state.borrow_mut().secondary_power_watts = Some(value);
+            window.set_live_secondary_power_watts(i32::from(value.max(0)));
+            window.set_secondary_power_connection_status("Connected and receiving data".into());
+        }
+        (DeviceRole::HeartRate, DeviceMeasurement::HeartRateBpm(value)) => {
+            state.borrow_mut().external_heart_rate_bpm = Some(value);
+            window.set_live_heart_rate_bpm(i32::from(value));
+            window.set_heart_rate_bpm(i32::from(value));
+            window.set_heart_rate_connection_status("Connected and receiving data".into());
+        }
+        (DeviceRole::Cadence, DeviceMeasurement::CadenceRpm(value)) => {
+            state.borrow_mut().external_cadence_rpm = Some(value);
+            window.set_live_cadence_rpm(i32::from(value));
+            window.set_cadence_rpm(i32::from(value));
+            window.set_cadence_connection_status("Connected and receiving data".into());
+        }
+        _ => {}
+    }
+}
+
+fn clear_role_measurement(state: &Rc<RefCell<AppState>>, role: DeviceRole) {
+    let mut state = state.borrow_mut();
+    match role {
+        DeviceRole::PowerSource => state.external_power_watts = None,
+        DeviceRole::SecondaryPowerSource => state.secondary_power_watts = None,
+        DeviceRole::HeartRate => state.external_heart_rate_bpm = None,
+        DeviceRole::Cadence => state.external_cadence_rpm = None,
+        DeviceRole::SmartTrainer => {}
+    }
 }
 
 fn start_ride(window: &slint::Weak<AppWindow>, state: &Rc<RefCell<AppState>>) {
@@ -295,6 +498,12 @@ fn tick(window: &AppWindow, state: &Rc<RefCell<AppState>>) {
     }
 
     if let Ok(mut sample) = state.trainer.next_sample() {
+        if let Some(power_watts) = state.external_power_watts {
+            sample.power_watts = u16::try_from(power_watts.max(0)).unwrap_or_default();
+        }
+        if let Some(cadence_rpm) = state.external_cadence_rpm {
+            sample.cadence_rpm = cadence_rpm;
+        }
         if let Some(heart_rate_bpm) = state.external_heart_rate_bpm {
             sample.heart_rate_bpm = u8::try_from(heart_rate_bpm).ok();
         }
@@ -310,16 +519,18 @@ fn render(window: &AppWindow, state: &AppState) {
 
     window.set_elapsed_text(format_duration(stats.elapsed_secs).into());
     window.set_power_watts(
-        latest
-            .map(|sample| sample.power_watts)
-            .unwrap_or_default()
-            .into(),
+        state
+            .external_power_watts
+            .map(|value| i32::from(value.max(0)))
+            .or_else(|| latest.map(|sample| i32::from(sample.power_watts)))
+            .unwrap_or_default(),
     );
     window.set_cadence_rpm(
-        latest
-            .map(|sample| sample.cadence_rpm)
-            .unwrap_or_default()
-            .into(),
+        state
+            .external_cadence_rpm
+            .map(i32::from)
+            .or_else(|| latest.map(|sample| i32::from(sample.cadence_rpm)))
+            .unwrap_or_default(),
     );
     window.set_heart_rate_bpm(
         state
