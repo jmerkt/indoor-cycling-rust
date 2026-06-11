@@ -11,10 +11,18 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
 
+const DEFAULT_FTP_WATTS: u16 = 200;
+
 struct AppState {
     recorder: RideRecorder,
     workout: WorkoutEngine,
     trainer: SimulatedTrainer,
+    ftp_watts: u16,
+    smart_trainer_connected: bool,
+    erg_enabled: bool,
+    erg_command_pending: bool,
+    erg_target_watts: Option<u16>,
+    erg_error: Option<String>,
     external_power_watts: Option<i16>,
     secondary_power_watts: Option<i16>,
     external_heart_rate_bpm: Option<u16>,
@@ -31,6 +39,12 @@ impl AppState {
             recorder: RideRecorder::new(),
             workout: WorkoutEngine::new(Workout::endurance_sample()),
             trainer,
+            ftp_watts: DEFAULT_FTP_WATTS,
+            smart_trainer_connected: false,
+            erg_enabled: false,
+            erg_command_pending: false,
+            erg_target_watts: None,
+            erg_error: None,
             external_power_watts: None,
             secondary_power_watts: None,
             external_heart_rate_bpm: None,
@@ -56,10 +70,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let discovery_timer = slint::Timer::default();
     let discovered_devices = Rc::new(VecModel::<DeviceListItem>::default());
     let bluetooth_service = BluetoothDeviceService::start().map(Rc::new);
+    let bluetooth_service_handle = bluetooth_service.as_ref().ok().cloned();
 
-    window.set_workout_name(state.borrow().workout.workout().name.clone().into());
-    window.set_ride_status("Ready".into());
     window.set_discovered_devices(ModelRc::from(Rc::clone(&discovered_devices)));
+    window.set_ride_status("Ready".into());
+    render(&window, &state.borrow());
 
     if let Err(error) = &bluetooth_service {
         window.set_device_scan_available(false);
@@ -89,9 +104,114 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let window_weak = window.as_weak();
         let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_set_ftp(move |ftp_watts| {
+            let mut state = state.borrow_mut();
+            state.ftp_watts = u16::try_from(ftp_watts.clamp(50, 600)).unwrap_or(DEFAULT_FTP_WATTS);
+            apply_current_target(&mut state);
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
+            if let Some(window) = window_weak.upgrade() {
+                render(&window, &state);
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_previous_stage(move || {
+            let mut state = state.borrow_mut();
+            state.workout.go_to_previous_step();
+            apply_current_target(&mut state);
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
+            if !state.running {
+                if let Some(window) = window_weak.upgrade() {
+                    window.set_ride_status("Paused".into());
+                    render(&window, &state);
+                }
+            } else if let Some(window) = window_weak.upgrade() {
+                render(&window, &state);
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_skip_stage(move || {
+            let mut state = state.borrow_mut();
+            state.workout.skip_to_next_step();
+            if matches!(state.workout.phase(), WorkoutPhase::Finished) {
+                state.running = false;
+                state.workout.pause();
+                disable_erg(&mut state, bluetooth_service.as_deref());
+            }
+            apply_current_target(&mut state);
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
+            if let Some(window) = window_weak.upgrade() {
+                if matches!(state.workout.phase(), WorkoutPhase::Finished) {
+                    window.set_ride_status("Finished".into());
+                }
+                render(&window, &state);
+            }
+        });
+    }
+
+    if let Some(bluetooth_service) = bluetooth_service_handle.clone() {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        window.on_toggle_erg_mode(move || {
+            let mut state = state.borrow_mut();
+            if !state.smart_trainer_connected || state.erg_command_pending {
+                return;
+            }
+
+            let enabled = !state.erg_enabled;
+            let target_power_watts = if enabled {
+                let Some(target_power_watts) = current_target_power(&state) else {
+                    state.erg_error = Some("no workout target is available".to_owned());
+                    if let Some(window) = window_weak.upgrade() {
+                        render(&window, &state);
+                    }
+                    return;
+                };
+                target_power_watts
+            } else {
+                0
+            };
+            match bluetooth_service.set_erg_mode(enabled, target_power_watts) {
+                Ok(()) => {
+                    state.erg_command_pending = true;
+                    state.erg_error = None;
+                    if let Some(window) = window_weak.upgrade() {
+                        window.set_erg_status(if enabled {
+                            "Enabling ERG...".into()
+                        } else {
+                            "Disabling ERG...".into()
+                        });
+                        render(&window, &state);
+                    }
+                }
+                Err(error) => {
+                    state.erg_error = Some(error.to_string());
+                    if let Some(window) = window_weak.upgrade() {
+                        render(&window, &state);
+                    }
+                }
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
         window.on_reset_ride(move || {
             let mut state = state.borrow_mut();
             state.reset_ride();
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
             if let Some(window) = window_weak.upgrade() {
                 render(&window, &state);
                 window.set_ride_status("Ready".into());
@@ -102,12 +222,13 @@ fn main() -> Result<(), slint::PlatformError> {
     {
         let window_weak = window.as_weak();
         let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
         ride_timer.start(
             slint::TimerMode::Repeated,
             Duration::from_secs(1),
             move || {
                 if let Some(window) = window_weak.upgrade() {
-                    tick(&window, &state);
+                    tick(&window, &state, bluetooth_service.as_deref());
                 }
             },
         );
@@ -235,20 +356,53 @@ fn handle_discovery_event(
             set_role_connecting(window, role, device_id.as_str());
         }
         DiscoveryEvent::RoleConnected { role, device_id } => {
+            if role == DeviceRole::SmartTrainer {
+                let mut state = state.borrow_mut();
+                state.smart_trainer_connected = true;
+                state.erg_enabled = false;
+                state.erg_command_pending = false;
+                state.erg_target_watts = None;
+                state.erg_error = None;
+            }
             set_role_connected(window, role, device_id.as_str());
+            render(window, &state.borrow());
         }
         DiscoveryEvent::Measurement { role, measurement } => {
             handle_measurement(window, state, role, measurement);
         }
         DiscoveryEvent::RoleDisconnected { role, .. } => {
             clear_role_measurement(state, role);
+            if role == DeviceRole::SmartTrainer {
+                clear_erg_state(&mut state.borrow_mut());
+            }
             set_role_disconnected(window, role);
             render(window, &state.borrow());
         }
         DiscoveryEvent::RoleError { role, message } => {
             clear_role_measurement(state, role);
+            if role == DeviceRole::SmartTrainer {
+                clear_erg_state(&mut state.borrow_mut());
+            }
             set_role_error(window, role, &message);
             render(window, &state.borrow());
+        }
+        DiscoveryEvent::ErgModeChanged {
+            enabled,
+            target_power_watts,
+        } => {
+            let mut state = state.borrow_mut();
+            state.erg_enabled = enabled;
+            state.erg_command_pending = false;
+            state.erg_target_watts = target_power_watts;
+            state.erg_error = None;
+            render(window, &state);
+        }
+        DiscoveryEvent::TrainerControlError(message) => {
+            let mut state = state.borrow_mut();
+            state.erg_command_pending = false;
+            state.erg_target_watts = None;
+            state.erg_error = Some(message);
+            render(window, &state);
         }
     }
 }
@@ -436,6 +590,7 @@ fn handle_measurement(
         (DeviceRole::SecondaryPowerSource, DeviceMeasurement::PowerWatts(value)) => {
             state.borrow_mut().secondary_power_watts = Some(value);
             window.set_live_secondary_power_watts(i32::from(value.max(0)));
+            window.set_secondary_power_watts(i32::from(value.max(0)));
             window.set_secondary_power_connection_status("Connected and receiving data".into());
         }
         (DeviceRole::HeartRate, DeviceMeasurement::HeartRateBpm(value)) => {
@@ -475,7 +630,11 @@ fn start_ride(window: &slint::Weak<AppWindow>, state: &Rc<RefCell<AppState>>) {
     }
 }
 
-fn tick(window: &AppWindow, state: &Rc<RefCell<AppState>>) {
+fn tick(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bluetooth_service: Option<&BluetoothDeviceService>,
+) {
     let mut state = state.borrow_mut();
     if !state.running {
         return;
@@ -484,14 +643,18 @@ fn tick(window: &AppWindow, state: &Rc<RefCell<AppState>>) {
     let phase = state.workout.tick();
     match phase {
         WorkoutPhase::Active { step, .. } => {
-            let _ = state.trainer.set_target_power(step.target_power_watts);
-            window.set_current_step(step.name.into());
-            window.set_target_power_watts(step.target_power_watts.into());
+            let ftp_watts = state.ftp_watts;
+            let _ = state
+                .trainer
+                .set_target_power(step.target_power_watts(ftp_watts));
+            sync_erg_target(&mut state, bluetooth_service);
         }
         WorkoutPhase::Finished => {
             state.running = false;
             state.workout.pause();
+            disable_erg(&mut state, bluetooth_service);
             window.set_ride_status("Finished".into());
+            render(window, &state);
             return;
         }
         WorkoutPhase::NotStarted => {}
@@ -516,13 +679,46 @@ fn tick(window: &AppWindow, state: &Rc<RefCell<AppState>>) {
 fn render(window: &AppWindow, state: &AppState) {
     let stats = state.recorder.stats();
     let latest = state.recorder.latest();
+    let phase = state.workout.phase();
 
+    window.set_workout_name(state.workout.workout().name.clone().into());
+    window.set_ftp_watts(i32::from(state.ftp_watts));
+    window.set_erg_enabled(state.erg_enabled);
+    window.set_erg_available(
+        state.smart_trainer_connected
+            && (state.erg_enabled || current_target_power(state).is_some()),
+    );
+    window.set_erg_pending(state.erg_command_pending);
+    window.set_erg_error(state.erg_error.is_some());
+    if let Some(error) = &state.erg_error {
+        window.set_erg_status(format!("ERG error: {error}").into());
+    } else if !state.smart_trainer_connected {
+        window.set_erg_status("Connect a smart trainer".into());
+    } else if state.erg_command_pending {
+        window.set_erg_status("Updating ERG...".into());
+    } else if state.erg_enabled {
+        window.set_erg_status(
+            format!(
+                "ERG holding {} W",
+                state.erg_target_watts.unwrap_or_default()
+            )
+            .into(),
+        );
+    } else {
+        window.set_erg_status("ERG mode off".into());
+    }
     window.set_elapsed_text(format_duration(stats.elapsed_secs).into());
     window.set_power_watts(
         state
             .external_power_watts
             .map(|value| i32::from(value.max(0)))
             .or_else(|| latest.map(|sample| i32::from(sample.power_watts)))
+            .unwrap_or_default(),
+    );
+    window.set_secondary_power_watts(
+        state
+            .secondary_power_watts
+            .map(|value| i32::from(value.max(0)))
             .unwrap_or_default(),
     );
     window.set_cadence_rpm(
@@ -544,6 +740,185 @@ fn render(window: &AppWindow, state: &AppState) {
             .unwrap_or_default(),
     );
     window.set_average_power_text(format!("{:.0} W", stats.average_power_watts).into());
+    render_workout(window, state, &phase);
+}
+
+fn apply_current_target(state: &mut AppState) {
+    let WorkoutPhase::Active { step, .. } = state.workout.phase() else {
+        return;
+    };
+
+    let _ = state
+        .trainer
+        .set_target_power(step.target_power_watts(state.ftp_watts));
+}
+
+fn current_target_power(state: &AppState) -> Option<u16> {
+    match state.workout.phase() {
+        WorkoutPhase::Active { step, .. } => Some(step.target_power_watts(state.ftp_watts)),
+        WorkoutPhase::NotStarted => state
+            .workout
+            .workout()
+            .steps
+            .first()
+            .map(|step| step.target_power_watts(state.ftp_watts)),
+        WorkoutPhase::Finished => None,
+    }
+}
+
+fn sync_erg_target(state: &mut AppState, bluetooth_service: Option<&BluetoothDeviceService>) {
+    if !state.erg_enabled || state.erg_command_pending {
+        return;
+    }
+    let Some(target_power_watts) = current_target_power(state) else {
+        return;
+    };
+    if state.erg_target_watts == Some(target_power_watts) {
+        return;
+    }
+    let Some(bluetooth_service) = bluetooth_service else {
+        return;
+    };
+
+    if bluetooth_service
+        .set_erg_target_power(target_power_watts)
+        .is_ok()
+    {
+        state.erg_command_pending = true;
+        state.erg_target_watts = Some(target_power_watts);
+        state.erg_error = None;
+    }
+}
+
+fn disable_erg(state: &mut AppState, bluetooth_service: Option<&BluetoothDeviceService>) {
+    if !state.erg_enabled || state.erg_command_pending {
+        return;
+    }
+    let Some(bluetooth_service) = bluetooth_service else {
+        return;
+    };
+
+    match bluetooth_service.set_erg_mode(false, 0) {
+        Ok(()) => {
+            state.erg_command_pending = true;
+            state.erg_error = None;
+        }
+        Err(error) => state.erg_error = Some(error.to_string()),
+    }
+}
+
+fn clear_erg_state(state: &mut AppState) {
+    state.smart_trainer_connected = false;
+    state.erg_enabled = false;
+    state.erg_command_pending = false;
+    state.erg_target_watts = None;
+    state.erg_error = None;
+}
+
+fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
+    let workout = state.workout.workout();
+    let (active_index, active_elapsed_secs) = match phase {
+        WorkoutPhase::Active {
+            step_index,
+            step_elapsed_secs,
+            ..
+        } => (Some(*step_index), *step_elapsed_secs),
+        _ => (None, 0),
+    };
+
+    let stages = workout
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let completed =
+                matches!(phase, WorkoutPhase::Finished) || active_index.is_some_and(|i| index < i);
+            let active = active_index == Some(index);
+            let progress_percent = if completed {
+                100
+            } else if active {
+                ((active_elapsed_secs.saturating_mul(100) / step.duration_secs.max(1)).min(100))
+                    as i32
+            } else {
+                0
+            };
+
+            WorkoutStageItem {
+                name: step.name.clone().into(),
+                duration_secs: i32::try_from(step.duration_secs).unwrap_or(i32::MAX),
+                duration_text: format_duration(step.duration_secs).into(),
+                target_percent: i32::from(step.target_ftp_percent),
+                target_watts: i32::from(step.target_power_watts(state.ftp_watts)),
+                progress_percent,
+                active,
+                completed,
+            }
+        })
+        .collect::<Vec<_>>();
+    window.set_workout_stages(ModelRc::from(Rc::new(VecModel::from(stages))));
+
+    match phase {
+        WorkoutPhase::NotStarted => {
+            let first_step = workout.steps.first();
+            window.set_current_step(
+                first_step
+                    .map(|step| step.name.as_str())
+                    .unwrap_or("No workout stages")
+                    .into(),
+            );
+            window.set_target_power_watts(
+                first_step
+                    .map(|step| i32::from(step.target_power_watts(state.ftp_watts)))
+                    .unwrap_or_default(),
+            );
+            window.set_workout_status(
+                first_step
+                    .map(|step| {
+                        format!(
+                            "Ready: {} at {} W ({}% FTP)",
+                            step.name,
+                            step.target_power_watts(state.ftp_watts),
+                            step.target_ftp_percent
+                        )
+                    })
+                    .unwrap_or_else(|| "No workout stages".to_owned())
+                    .into(),
+            );
+            window.set_can_go_previous_stage(false);
+            window.set_can_skip_stage(first_step.is_some());
+        }
+        WorkoutPhase::Active {
+            step_index,
+            step_elapsed_secs,
+            step,
+        } => {
+            let remaining_secs = step.duration_secs.saturating_sub(*step_elapsed_secs);
+            let target_watts = step.target_power_watts(state.ftp_watts);
+            window.set_current_step(step.name.clone().into());
+            window.set_target_power_watts(i32::from(target_watts));
+            window.set_workout_status(
+                format!(
+                    "Stage {} of {}: {} | {} remaining | {} W ({}% FTP)",
+                    step_index + 1,
+                    workout.steps.len(),
+                    step.name,
+                    format_duration(remaining_secs),
+                    target_watts,
+                    step.target_ftp_percent
+                )
+                .into(),
+            );
+            window.set_can_go_previous_stage(*step_index > 0);
+            window.set_can_skip_stage(true);
+        }
+        WorkoutPhase::Finished => {
+            window.set_current_step("Workout complete".into());
+            window.set_target_power_watts(0);
+            window.set_workout_status("Workout complete".into());
+            window.set_can_go_previous_stage(!workout.steps.is_empty());
+            window.set_can_skip_stage(false);
+        }
+    }
 }
 
 fn format_duration(total_secs: u64) -> String {

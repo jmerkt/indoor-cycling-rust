@@ -21,6 +21,7 @@ pub enum DeviceError {
     ConnectionFailed(String),
     BluetoothUnavailable(String),
     ScanFailed(String),
+    ControlFailed(String),
     InvalidData(String),
     ServiceStopped,
 }
@@ -34,6 +35,7 @@ impl std::fmt::Display for DeviceError {
                 write!(formatter, "Bluetooth is unavailable: {message}")
             }
             Self::ScanFailed(message) => write!(formatter, "Bluetooth scan failed: {message}"),
+            Self::ControlFailed(message) => write!(formatter, "trainer control failed: {message}"),
             Self::InvalidData(message) => write!(formatter, "invalid Bluetooth data: {message}"),
             Self::ServiceStopped => write!(formatter, "Bluetooth service has stopped"),
         }

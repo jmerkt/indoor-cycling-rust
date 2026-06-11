@@ -11,6 +11,17 @@ export struct DeviceListItem {
     supports-smart-trainer: bool,
 }
 
+export struct WorkoutStageItem {
+    name: string,
+    duration-secs: int,
+    duration-text: string,
+    target-percent: int,
+    target-watts: int,
+    progress-percent: int,
+    active: bool,
+    completed: bool,
+}
+
 component ActionButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
@@ -65,6 +76,154 @@ component MenuButton inherits Rectangle {
     }
 }
 
+component FtpStepButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    min-width: 38px;
+    max-width: 38px;
+    min-height: 38px;
+    max-height: 38px;
+    opacity: root.enabled ? 1 : 0.4;
+    background: touch.pressed && root.enabled
+        ? #0d5f59
+        : touch.has-hover && root.enabled ? #0f766e : #e6f4f2;
+    border-color: #9ccbc6;
+    border-width: 1px;
+    border-radius: 6px;
+
+    Text {
+        text: root.text;
+        color: touch.has-hover && root.enabled ? white : #0f766e;
+        font-size: 22px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+component FtpControl inherits Rectangle {
+    in property <int> value;
+    callback changed(int);
+
+    min-width: 250px;
+    max-width: 250px;
+    min-height: 74px;
+    max-height: 74px;
+    background: white;
+    border-color: #cbd5df;
+    border-width: 1px;
+    border-radius: 8px;
+
+    HorizontalBox {
+        padding: 12px;
+        spacing: 10px;
+
+        VerticalBox {
+            spacing: 1px;
+
+            Text {
+                text: "FTP";
+                color: #53616f;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            Text {
+                text: root.value + " W";
+                color: #17202a;
+                font-size: 24px;
+                font-weight: 800;
+            }
+        }
+
+        FtpStepButton {
+            text: "-";
+            enabled: root.value > 50;
+            clicked => { root.changed(max(50, root.value - 5)); }
+        }
+
+        FtpStepButton {
+            text: "+";
+            enabled: root.value < 600;
+            clicked => { root.changed(min(600, root.value + 5)); }
+        }
+    }
+}
+
+component ErgControl inherits Rectangle {
+    in property <bool> enabled;
+    in property <bool> available;
+    in property <bool> pending;
+    in property <bool> error;
+    in property <string> status;
+    callback toggled();
+
+    min-width: 250px;
+    max-width: 250px;
+    min-height: 74px;
+    max-height: 74px;
+    background: root.enabled ? #ecfdf5 : white;
+    border-color: root.enabled ? #0f766e : #cbd5df;
+    border-width: root.enabled ? 2px : 1px;
+    border-radius: 8px;
+
+    HorizontalBox {
+        padding: 12px;
+        spacing: 10px;
+
+        VerticalBox {
+            spacing: 2px;
+
+            Text {
+                text: "ERG Mode";
+                color: #17202a;
+                font-size: 15px;
+                font-weight: 700;
+            }
+
+            Text {
+                text: root.status;
+                color: root.error ? #be123c : #53616f;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+
+        Rectangle {
+            min-width: 72px;
+            max-width: 72px;
+            min-height: 38px;
+            max-height: 38px;
+            opacity: root.available && !root.pending ? 1 : 0.45;
+            background: root.enabled ? #0f766e : #e6ebf0;
+            border-color: root.enabled ? #0f766e : #aeb8c2;
+            border-width: 1px;
+            border-radius: 19px;
+
+            Text {
+                text: root.pending ? "..." : root.enabled ? "ON" : "OFF";
+                color: root.enabled ? white : #53616f;
+                font-size: 13px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            touch := TouchArea {
+                enabled: root.available && !root.pending;
+                clicked => { root.toggled(); }
+            }
+        }
+    }
+}
+
 component MetricTile inherits Rectangle {
     in property <string> label;
     in property <int> value;
@@ -100,6 +259,107 @@ component MetricTile inherits Rectangle {
             font-size: 15px;
             horizontal-alignment: center;
         }
+    }
+}
+
+component PowerMetricTile inherits Rectangle {
+    in property <int> primary-value;
+    in property <int> secondary-value;
+
+    background: #fbfcfd;
+    border-color: #d8dde3;
+    border-width: 1px;
+    border-radius: 8px;
+
+    VerticalBox {
+        padding: 18px;
+        spacing: 8px;
+
+        Text {
+            text: "Power";
+            color: #53616f;
+            font-size: 14px;
+        }
+
+        Text {
+            text: root.primary-value;
+            color: #0f766e;
+            font-size: 46px;
+            font-weight: 800;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "W";
+            color: #53616f;
+            font-size: 15px;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.secondary-value > 0
+                ? "Secondary  " + root.secondary-value + " W"
+                : "Secondary  -- W";
+            color: #7c3aed;
+            font-size: 14px;
+            font-weight: 600;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component WorkoutStageBlock inherits Rectangle {
+    in property <string> stage-name;
+    in property <string> duration-text;
+    in property <int> target-percent;
+    in property <int> target-watts;
+    in property <int> progress-percent;
+    in property <bool> active;
+    in property <bool> completed;
+
+    min-width: 112px;
+    min-height: 118px;
+    background: root.active ? #ecfdf5 : root.completed ? #f0fdfa : #f8fafc;
+    border-color: root.active ? #0f766e : #d8dde3;
+    border-width: root.active ? 3px : 1px;
+    border-radius: 6px;
+
+    VerticalBox {
+        padding: 12px;
+        spacing: 5px;
+
+        Text {
+            text: root.stage-name;
+            color: #17202a;
+            font-size: 15px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.target-watts + " W";
+            color: root.active ? #0f766e : #334155;
+            font-size: 22px;
+            font-weight: 800;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: root.target-percent + "% FTP  /  " + root.duration-text;
+            color: #64748b;
+            font-size: 12px;
+            horizontal-alignment: center;
+        }
+    }
+
+    Rectangle {
+        x: 0px;
+        y: parent.height - 7px;
+        width: parent.width * root.progress-percent / 100;
+        height: 7px;
+        background: #14b8a6;
+        border-radius: 3px;
     }
 }
 
@@ -159,17 +419,28 @@ component RoleStatus inherits Rectangle {
 export component AppWindow inherits Window {
     title: "Indoor Cycling";
     width: 900px;
-    height: 560px;
+    height: 720px;
 
     in property <string> workout-name;
     in property <string> ride-status;
     in property <string> current-step: "No active step";
     in property <string> elapsed-text: "00:00";
     in property <int> power-watts: 0;
+    in property <int> secondary-power-watts: 0;
     in property <int> target-power-watts: 0;
     in property <int> cadence-rpm: 0;
     in property <int> heart-rate-bpm: 0;
     in property <string> average-power-text: "0 W";
+    in property <int> ftp-watts: 200;
+    in property <bool> erg-enabled: false;
+    in property <bool> erg-available: false;
+    in property <bool> erg-pending: false;
+    in property <bool> erg-error: false;
+    in property <string> erg-status: "Connect a smart trainer";
+    in property <string> workout-status: "Ready to start";
+    in property <[WorkoutStageItem]> workout-stages;
+    in property <bool> can-go-previous-stage: false;
+    in property <bool> can-skip-stage: true;
     in property <[DeviceListItem]> discovered-devices;
     in property <string> device-scan-status: "Ready to scan";
     in property <bool> device-scan-running: false;
@@ -207,6 +478,10 @@ export component AppWindow inherits Window {
     callback start-ride();
     callback pause-ride();
     callback reset-ride();
+    callback set-ftp(int);
+    callback toggle-erg-mode();
+    callback previous-stage();
+    callback skip-stage();
     callback scan-devices();
     callback connect-device(string, int);
     callback disconnect-device(int);
@@ -278,6 +553,55 @@ export component AppWindow inherits Window {
                             font-size: 16px;
                         }
                     }
+
+                    FtpControl {
+                        value: root.ftp-watts;
+                        changed(value) => { root.set-ftp(value); }
+                    }
+
+                    ErgControl {
+                        enabled: root.erg-enabled;
+                        available: root.erg-available;
+                        pending: root.erg-pending;
+                        error: root.erg-error;
+                        status: root.erg-status;
+                        toggled => { root.toggle-erg-mode(); }
+                    }
+                }
+
+                Rectangle {
+                    background: white;
+                    border-color: #d8dde3;
+                    border-width: 1px;
+                    border-radius: 8px;
+                    min-height: 192px;
+
+                    VerticalBox {
+                        padding: 16px;
+                        spacing: 12px;
+
+                        Text {
+                            text: root.workout-status;
+                            color: #334155;
+                            font-size: 15px;
+                            font-weight: 600;
+                        }
+
+                        HorizontalBox {
+                            spacing: 6px;
+
+                            for stage in root.workout-stages : WorkoutStageBlock {
+                                horizontal-stretch: stage.duration-secs;
+                                stage-name: stage.name;
+                                duration-text: stage.duration-text;
+                                target-percent: stage.target-percent;
+                                target-watts: stage.target-watts;
+                                progress-percent: stage.progress-percent;
+                                active: stage.active;
+                                completed: stage.completed;
+                            }
+                        }
+                    }
                 }
 
                 Rectangle {
@@ -291,11 +615,9 @@ export component AppWindow inherits Window {
                         padding: 24px;
                         spacing: 24px;
 
-                        MetricTile {
-                            label: "Power";
-                            value: root.power-watts;
-                            suffix: "W";
-                            accent: #0f766e;
+                        PowerMetricTile {
+                            primary-value: root.power-watts;
+                            secondary-value: root.secondary-power-watts;
                         }
 
                         MetricTile {
@@ -664,6 +986,18 @@ export component AppWindow inherits Window {
                 ActionButton {
                     text: "Reset";
                     clicked => { root.reset-ride(); }
+                }
+
+                ActionButton {
+                    text: "Previous Stage";
+                    enabled: root.can-go-previous-stage;
+                    clicked => { root.previous-stage(); }
+                }
+
+                ActionButton {
+                    text: "Skip Stage";
+                    enabled: root.can-skip-stage;
+                    clicked => { root.skip-stage(); }
                 }
             }
         }

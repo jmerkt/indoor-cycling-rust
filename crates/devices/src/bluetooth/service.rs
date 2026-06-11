@@ -46,6 +46,17 @@ impl BluetoothDeviceService {
         self.send(DiscoveryCommand::Disconnect { role })
     }
 
+    pub fn set_erg_mode(&self, enabled: bool, target_power_watts: u16) -> Result<(), DeviceError> {
+        self.send(DiscoveryCommand::SetErgMode {
+            enabled,
+            target_power_watts,
+        })
+    }
+
+    pub fn set_erg_target_power(&self, target_power_watts: u16) -> Result<(), DeviceError> {
+        self.send(DiscoveryCommand::SetErgTargetPower { target_power_watts })
+    }
+
     pub fn try_recv(&self) -> Result<DiscoveryEvent, mpsc::TryRecvError> {
         self.events.try_recv()
     }
@@ -249,6 +260,43 @@ async fn handle_command(
         DiscoveryCommand::Disconnect { role } => {
             disconnect_role(role, connections, events).await;
             false
+        }
+        DiscoveryCommand::SetErgMode {
+            enabled,
+            target_power_watts,
+        } => {
+            let result = match connections.get_mut(&DeviceRole::SmartTrainer) {
+                Some(connection) => connection.set_erg_mode(enabled, target_power_watts).await,
+                None => Err(DeviceError::NotConnected),
+            };
+            match result {
+                Ok(()) => events
+                    .send(DiscoveryEvent::ErgModeChanged {
+                        enabled,
+                        target_power_watts: enabled.then_some(target_power_watts),
+                    })
+                    .is_err(),
+                Err(error) => events
+                    .send(DiscoveryEvent::TrainerControlError(error.to_string()))
+                    .is_err(),
+            }
+        }
+        DiscoveryCommand::SetErgTargetPower { target_power_watts } => {
+            let result = match connections.get_mut(&DeviceRole::SmartTrainer) {
+                Some(connection) => connection.set_erg_target_power(target_power_watts).await,
+                None => Err(DeviceError::NotConnected),
+            };
+            match result {
+                Ok(()) => events
+                    .send(DiscoveryEvent::ErgModeChanged {
+                        enabled: true,
+                        target_power_watts: Some(target_power_watts),
+                    })
+                    .is_err(),
+                Err(error) => events
+                    .send(DiscoveryEvent::TrainerControlError(error.to_string()))
+                    .is_err(),
+            }
         }
         DiscoveryCommand::Shutdown => {
             disconnect_all(connections, events).await;

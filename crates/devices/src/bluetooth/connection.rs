@@ -1,8 +1,9 @@
 use std::pin::Pin;
 
-use btleplug::api::{Peripheral as _, ValueNotification};
+use btleplug::api::{Characteristic, Peripheral as _, ValueNotification, WriteType};
 use btleplug::platform::Peripheral;
-use futures::Stream;
+use futures::{Stream, StreamExt};
+use tokio::time::{timeout, Duration};
 
 use crate::bluetooth::cadence::{self, CadenceTracker};
 use crate::bluetooth::cycling_power;
@@ -10,8 +11,8 @@ use crate::bluetooth::fitness_machine;
 use crate::bluetooth::heart_rate;
 use crate::bluetooth::uuids::{
     CSC_MEASUREMENT, CYCLING_POWER_MEASUREMENT, CYCLING_POWER_SERVICE,
-    CYCLING_SPEED_AND_CADENCE_SERVICE, FITNESS_MACHINE_SERVICE, HEART_RATE_MEASUREMENT,
-    HEART_RATE_SERVICE, INDOOR_BIKE_DATA,
+    CYCLING_SPEED_AND_CADENCE_SERVICE, FITNESS_MACHINE_CONTROL_POINT, FITNESS_MACHINE_SERVICE,
+    HEART_RATE_MEASUREMENT, HEART_RATE_SERVICE, INDOOR_BIKE_DATA,
 };
 use crate::{DeviceError, DeviceId, DeviceMeasurement, DeviceRole};
 
@@ -20,6 +21,8 @@ pub struct DeviceConnection {
     pub device_id: DeviceId,
     pub peripheral: Peripheral,
     pub notifications: Option<Pin<Box<dyn Stream<Item = ValueNotification> + Send>>>,
+    control_point: Option<Characteristic>,
+    control_acquired: bool,
     cadence_tracker: CadenceTracker,
 }
 
@@ -73,6 +76,73 @@ impl DeviceConnection {
             _ => Ok(None),
         }
     }
+
+    pub async fn set_erg_mode(
+        &mut self,
+        enabled: bool,
+        target_power_watts: u16,
+    ) -> Result<(), DeviceError> {
+        if enabled {
+            if !self.control_acquired {
+                self.write_control_command(&fitness_machine::request_control_command())
+                    .await?;
+                self.control_acquired = true;
+            }
+            self.set_erg_target_power(target_power_watts).await
+        } else {
+            self.write_control_command(&fitness_machine::reset_command())
+                .await?;
+            self.control_acquired = false;
+            Ok(())
+        }
+    }
+
+    pub async fn set_erg_target_power(
+        &mut self,
+        target_power_watts: u16,
+    ) -> Result<(), DeviceError> {
+        if !self.control_acquired {
+            return Err(DeviceError::ControlFailed(
+                "ERG mode is not enabled".to_owned(),
+            ));
+        }
+
+        self.write_control_command(&fitness_machine::set_target_power_command(
+            target_power_watts,
+        ))
+        .await
+    }
+
+    async fn write_control_command(&mut self, command: &[u8]) -> Result<(), DeviceError> {
+        let characteristic = self.control_point.as_ref().ok_or_else(|| {
+            DeviceError::ControlFailed("Fitness Machine Control Point was not found".to_owned())
+        })?;
+        let expected_opcode = command[0];
+
+        self.peripheral
+            .write(characteristic, command, WriteType::WithResponse)
+            .await
+            .map_err(control_failed)?;
+
+        let notifications = self.notifications.as_mut().ok_or_else(|| {
+            DeviceError::ControlFailed(
+                "Fitness Machine Control Point indications are unavailable".to_owned(),
+            )
+        })?;
+        let response = timeout(Duration::from_secs(5), async {
+            while let Some(notification) = notifications.next().await {
+                if notification.uuid == FITNESS_MACHINE_CONTROL_POINT {
+                    return Some(notification);
+                }
+            }
+            None
+        })
+        .await
+        .map_err(|_| DeviceError::ControlFailed("trainer response timed out".to_owned()))?
+        .ok_or_else(|| DeviceError::ControlFailed("trainer disconnected".to_owned()))?;
+
+        fitness_machine::parse_control_point_response(&response.value, expected_opcode)
+    }
 }
 
 pub async fn connect(
@@ -125,6 +195,13 @@ pub async fn connect(
             }),
         DeviceRole::SmartTrainer => None,
     };
+    let control_point = characteristics
+        .iter()
+        .find(|value| {
+            value.service_uuid == FITNESS_MACHINE_SERVICE
+                && value.uuid == FITNESS_MACHINE_CONTROL_POINT
+        })
+        .cloned();
 
     if role == DeviceRole::SmartTrainer {
         let has_ftms = peripheral
@@ -137,6 +214,12 @@ pub async fn connect(
                 "Fitness Machine Service was not found".to_owned(),
             ));
         }
+        if control_point.is_none() {
+            disconnect_if_owned(&peripheral, was_connected).await;
+            return Err(DeviceError::ConnectionFailed(
+                "Fitness Machine Control Point was not found".to_owned(),
+            ));
+        }
     } else if characteristic.is_none() {
         disconnect_if_owned(&peripheral, was_connected).await;
         return Err(DeviceError::ConnectionFailed(format!(
@@ -145,8 +228,13 @@ pub async fn connect(
         )));
     }
 
-    let notifications = if let Some(characteristic) = characteristic {
-        if let Err(error) = peripheral.subscribe(characteristic).await {
+    let subscribed_characteristic = if role == DeviceRole::SmartTrainer {
+        control_point.as_ref()
+    } else {
+        characteristic
+    };
+    let notifications = if let Some(subscribed_characteristic) = subscribed_characteristic {
+        if let Err(error) = peripheral.subscribe(subscribed_characteristic).await {
             disconnect_if_owned(&peripheral, was_connected).await;
             return Err(connection_failed(error));
         }
@@ -167,6 +255,8 @@ pub async fn connect(
         device_id,
         peripheral,
         notifications,
+        control_point,
+        control_acquired: false,
         cadence_tracker: CadenceTracker::default(),
     })
 }
@@ -179,6 +269,10 @@ async fn disconnect_if_owned(peripheral: &Peripheral, was_connected: bool) {
 
 fn connection_failed(error: impl std::fmt::Display) -> DeviceError {
     DeviceError::ConnectionFailed(error.to_string())
+}
+
+fn control_failed(error: impl std::fmt::Display) -> DeviceError {
+    DeviceError::ControlFailed(error.to_string())
 }
 
 fn role_name(role: DeviceRole) -> &'static str {

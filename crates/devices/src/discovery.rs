@@ -71,6 +71,13 @@ pub enum DiscoveryCommand {
     Disconnect {
         role: DeviceRole,
     },
+    SetErgMode {
+        enabled: bool,
+        target_power_watts: u16,
+    },
+    SetErgTargetPower {
+        target_power_watts: u16,
+    },
     Shutdown,
 }
 
@@ -106,5 +113,10 @@ pub enum DiscoveryEvent {
         role: DeviceRole,
         message: String,
     },
+    ErgModeChanged {
+        enabled: bool,
+        target_power_watts: Option<u16>,
+    },
+    TrainerControlError(String),
     Error(String),
 }
