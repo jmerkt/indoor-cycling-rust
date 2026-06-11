@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
-use btleplug::api::{Central, Manager as _, Peripheral as _, ValueNotification};
-use btleplug::platform::{Manager, Peripheral};
+use btleplug::api::{Peripheral as _, ValueNotification};
+use btleplug::platform::Peripheral;
 use futures::Stream;
 
 use crate::bluetooth::cadence::{self, CadenceTracker};
@@ -78,9 +78,8 @@ impl DeviceConnection {
 pub async fn connect(
     role: DeviceRole,
     device_id: DeviceId,
+    peripheral: Peripheral,
 ) -> Result<DeviceConnection, DeviceError> {
-    let peripheral = find_peripheral(&device_id).await?;
-
     let was_connected = peripheral.is_connected().await.map_err(connection_failed)?;
     if !was_connected {
         peripheral.connect().await.map_err(connection_failed)?;
@@ -176,30 +175,6 @@ async fn disconnect_if_owned(peripheral: &Peripheral, was_connected: bool) {
     if !was_connected {
         let _ = peripheral.disconnect().await;
     }
-}
-
-async fn find_peripheral(device_id: &DeviceId) -> Result<Peripheral, DeviceError> {
-    let manager = Manager::new()
-        .await
-        .map_err(|error| DeviceError::BluetoothUnavailable(error.to_string()))?;
-    let adapters = manager
-        .adapters()
-        .await
-        .map_err(|error| DeviceError::BluetoothUnavailable(error.to_string()))?;
-
-    for adapter in adapters {
-        let peripherals = adapter.peripherals().await.map_err(connection_failed)?;
-        if let Some(peripheral) = peripherals
-            .into_iter()
-            .find(|peripheral| peripheral.id().to_string() == device_id.as_str())
-        {
-            return Ok(peripheral);
-        }
-    }
-
-    Err(DeviceError::ConnectionFailed(format!(
-        "device {device_id} is no longer available"
-    )))
 }
 
 fn connection_failed(error: impl std::fmt::Display) -> DeviceError {

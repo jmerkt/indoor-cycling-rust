@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
-use btleplug::platform::Manager;
+use btleplug::platform::{Adapter, Manager, Peripheral};
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -13,14 +13,17 @@ use crate::bluetooth::uuids::{
 use crate::{DeviceCapabilities, DeviceError, DeviceId, DiscoveredDevice};
 
 #[derive(Debug, Clone, Default)]
-pub struct BluetoothScanner;
+pub struct BluetoothScanner {
+    adapters: Vec<Adapter>,
+    peripherals: HashMap<DeviceId, Peripheral>,
+}
 
 impl BluetoothScanner {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
-    pub async fn scan(&self, duration: Duration) -> Result<Vec<DiscoveredDevice>, DeviceError> {
+    pub async fn scan(&mut self, duration: Duration) -> Result<Vec<DiscoveredDevice>, DeviceError> {
         let manager = Manager::new()
             .await
             .map_err(|error| DeviceError::BluetoothUnavailable(error.to_string()))?;
@@ -35,8 +38,11 @@ impl BluetoothScanner {
             ));
         }
 
+        self.adapters = adapters;
+        self.peripherals.clear();
+
         let mut devices = HashMap::new();
-        for adapter in adapters {
+        for adapter in &self.adapters {
             adapter
                 .start_scan(ScanFilter::default())
                 .await
@@ -66,6 +72,7 @@ impl BluetoothScanner {
                 let name = properties
                     .local_name
                     .unwrap_or_else(|| format!("Bluetooth device {id}"));
+                self.peripherals.insert(id.clone(), peripheral);
                 devices.insert(
                     id.clone(),
                     DiscoveredDevice {
@@ -91,6 +98,14 @@ impl BluetoothScanner {
                 .then_with(|| left.name.cmp(&right.name))
         });
         Ok(devices)
+    }
+
+    pub fn peripheral(&self, device_id: &DeviceId) -> Result<Peripheral, DeviceError> {
+        self.peripherals.get(device_id).cloned().ok_or_else(|| {
+            DeviceError::ConnectionFailed(format!(
+                "device {device_id} is no longer available; scan for devices again"
+            ))
+        })
     }
 }
 

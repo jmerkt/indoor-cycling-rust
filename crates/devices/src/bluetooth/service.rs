@@ -94,7 +94,7 @@ async fn run_service(
     mut commands: UnboundedReceiver<DiscoveryCommand>,
     events: std::sync::mpsc::Sender<DiscoveryEvent>,
 ) {
-    let scanner = BluetoothScanner::new();
+    let mut scanner = BluetoothScanner::new();
     let mut connections = HashMap::<DeviceRole, DeviceConnection>::new();
 
     loop {
@@ -117,7 +117,7 @@ async fn run_service(
             return;
         };
 
-        if handle_command(command, &scanner, &mut connections, &events).await {
+        if handle_command(command, &mut scanner, &mut connections, &events).await {
             return;
         }
     }
@@ -174,7 +174,7 @@ fn poll_notifications(
 
 async fn handle_command(
     command: DiscoveryCommand,
-    scanner: &BluetoothScanner,
+    scanner: &mut BluetoothScanner,
     connections: &mut HashMap<DeviceRole, DeviceConnection>,
     events: &std::sync::mpsc::Sender<DiscoveryEvent>,
 ) -> bool {
@@ -219,7 +219,19 @@ async fn handle_command(
                 return true;
             }
 
-            match connection::connect(role, device_id.clone()).await {
+            let peripheral = match scanner.peripheral(&device_id) {
+                Ok(peripheral) => peripheral,
+                Err(error) => {
+                    return events
+                        .send(DiscoveryEvent::RoleError {
+                            role,
+                            message: error.to_string(),
+                        })
+                        .is_err();
+                }
+            };
+
+            match connection::connect(role, device_id.clone(), peripheral).await {
                 Ok(connection) => {
                     connections.insert(role, connection);
                     events
