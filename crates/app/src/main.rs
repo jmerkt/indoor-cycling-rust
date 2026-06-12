@@ -1,0 +1,928 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use indoor_cycling_core::{RideRecorder, Workout, WorkoutEngine, WorkoutPhase};
+use indoor_cycling_devices::{
+    BluetoothDeviceService, DeviceCapabilities, DeviceId, DeviceMeasurement, DeviceRole,
+    DiscoveryEvent, SimulatedTrainer, TrainerDevice,
+};
+use slint::{Model, ModelRc, SharedString, VecModel};
+
+slint::include_modules!();
+
+const DEFAULT_FTP_WATTS: u16 = 200;
+
+struct AppState {
+    recorder: RideRecorder,
+    workout: WorkoutEngine,
+    trainer: SimulatedTrainer,
+    ftp_watts: u16,
+    smart_trainer_connected: bool,
+    erg_enabled: bool,
+    erg_command_pending: bool,
+    erg_target_watts: Option<u16>,
+    erg_error: Option<String>,
+    external_power_watts: Option<i16>,
+    secondary_power_watts: Option<i16>,
+    external_heart_rate_bpm: Option<u16>,
+    external_cadence_rpm: Option<u16>,
+    running: bool,
+}
+
+impl AppState {
+    fn new() -> Self {
+        let mut trainer = SimulatedTrainer::new();
+        trainer.connect().expect("simulated trainer should connect");
+
+        Self {
+            recorder: RideRecorder::new(),
+            workout: WorkoutEngine::new(Workout::endurance_sample()),
+            trainer,
+            ftp_watts: DEFAULT_FTP_WATTS,
+            smart_trainer_connected: false,
+            erg_enabled: false,
+            erg_command_pending: false,
+            erg_target_watts: None,
+            erg_error: None,
+            external_power_watts: None,
+            secondary_power_watts: None,
+            external_heart_rate_bpm: None,
+            external_cadence_rpm: None,
+            running: false,
+        }
+    }
+
+    fn reset_ride(&mut self) {
+        let mut trainer = SimulatedTrainer::new();
+        trainer.connect().expect("simulated trainer should connect");
+        self.recorder = RideRecorder::new();
+        self.workout = WorkoutEngine::new(Workout::endurance_sample());
+        self.trainer = trainer;
+        self.running = false;
+    }
+}
+
+fn main() -> Result<(), slint::PlatformError> {
+    let window = AppWindow::new()?;
+    let state = Rc::new(RefCell::new(AppState::new()));
+    let ride_timer = slint::Timer::default();
+    let discovery_timer = slint::Timer::default();
+    let discovered_devices = Rc::new(VecModel::<DeviceListItem>::default());
+    let bluetooth_service = BluetoothDeviceService::start().map(Rc::new);
+    let bluetooth_service_handle = bluetooth_service.as_ref().ok().cloned();
+
+    window.set_discovered_devices(ModelRc::from(Rc::clone(&discovered_devices)));
+    window.set_ride_status("Ready".into());
+    render(&window, &state.borrow());
+
+    if let Err(error) = &bluetooth_service {
+        window.set_device_scan_available(false);
+        window.set_device_scan_error(true);
+        window.set_device_scan_status(format!("Error: {error}").into());
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        window.on_start_ride(move || start_ride(&window_weak, &state));
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        window.on_pause_ride(move || {
+            let mut state = state.borrow_mut();
+            state.running = false;
+            state.workout.pause();
+            if let Some(window) = window_weak.upgrade() {
+                window.set_ride_status("Paused".into());
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_set_ftp(move |ftp_watts| {
+            let mut state = state.borrow_mut();
+            state.ftp_watts = u16::try_from(ftp_watts.clamp(50, 600)).unwrap_or(DEFAULT_FTP_WATTS);
+            apply_current_target(&mut state);
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
+            if let Some(window) = window_weak.upgrade() {
+                render(&window, &state);
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_previous_stage(move || {
+            let mut state = state.borrow_mut();
+            state.workout.go_to_previous_step();
+            apply_current_target(&mut state);
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
+            if !state.running {
+                if let Some(window) = window_weak.upgrade() {
+                    window.set_ride_status("Paused".into());
+                    render(&window, &state);
+                }
+            } else if let Some(window) = window_weak.upgrade() {
+                render(&window, &state);
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_skip_stage(move || {
+            let mut state = state.borrow_mut();
+            state.workout.skip_to_next_step();
+            if matches!(state.workout.phase(), WorkoutPhase::Finished) {
+                state.running = false;
+                state.workout.pause();
+                disable_erg(&mut state, bluetooth_service.as_deref());
+            }
+            apply_current_target(&mut state);
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
+            if let Some(window) = window_weak.upgrade() {
+                if matches!(state.workout.phase(), WorkoutPhase::Finished) {
+                    window.set_ride_status("Finished".into());
+                }
+                render(&window, &state);
+            }
+        });
+    }
+
+    if let Some(bluetooth_service) = bluetooth_service_handle.clone() {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        window.on_toggle_erg_mode(move || {
+            let mut state = state.borrow_mut();
+            if !state.smart_trainer_connected || state.erg_command_pending {
+                return;
+            }
+
+            let enabled = !state.erg_enabled;
+            let target_power_watts = if enabled {
+                let Some(target_power_watts) = current_target_power(&state) else {
+                    state.erg_error = Some("no workout target is available".to_owned());
+                    if let Some(window) = window_weak.upgrade() {
+                        render(&window, &state);
+                    }
+                    return;
+                };
+                target_power_watts
+            } else {
+                0
+            };
+            match bluetooth_service.set_erg_mode(enabled, target_power_watts) {
+                Ok(()) => {
+                    state.erg_command_pending = true;
+                    state.erg_error = None;
+                    if let Some(window) = window_weak.upgrade() {
+                        window.set_erg_status(if enabled {
+                            "Enabling ERG...".into()
+                        } else {
+                            "Disabling ERG...".into()
+                        });
+                        render(&window, &state);
+                    }
+                }
+                Err(error) => {
+                    state.erg_error = Some(error.to_string());
+                    if let Some(window) = window_weak.upgrade() {
+                        render(&window, &state);
+                    }
+                }
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_reset_ride(move || {
+            let mut state = state.borrow_mut();
+            state.reset_ride();
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
+            if let Some(window) = window_weak.upgrade() {
+                render(&window, &state);
+                window.set_ride_status("Ready".into());
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        ride_timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_secs(1),
+            move || {
+                if let Some(window) = window_weak.upgrade() {
+                    tick(&window, &state, bluetooth_service.as_deref());
+                }
+            },
+        );
+    }
+
+    if let Ok(bluetooth_service) = &bluetooth_service {
+        let service = Rc::clone(bluetooth_service);
+        let window_weak = window.as_weak();
+        let scan_devices_model = Rc::clone(&discovered_devices);
+        window.on_scan_devices(move || {
+            scan_devices_model.set_vec(Vec::new());
+            if let Some(window) = window_weak.upgrade() {
+                window.set_device_scan_error(false);
+                window.set_device_scan_running(true);
+                window.set_device_scan_status("Starting Bluetooth scan...".into());
+            }
+
+            if let Err(error) = service.scan(Duration::from_secs(5)) {
+                if let Some(window) = window_weak.upgrade() {
+                    window.set_device_scan_error(true);
+                    window.set_device_scan_running(false);
+                    window.set_device_scan_status(format!("Error: {error}").into());
+                }
+            }
+        });
+
+        let service = Rc::clone(bluetooth_service);
+        let window_weak = window.as_weak();
+        window.on_connect_device(move |device_id, role_index| {
+            let Some(role) = role_from_index(role_index) else {
+                return;
+            };
+            let device_id = DeviceId::new(device_id.as_str());
+            if let Some(window) = window_weak.upgrade() {
+                set_role_connecting(&window, role, device_id.as_str());
+            }
+
+            if let Err(error) = service.connect(role, device_id) {
+                if let Some(window) = window_weak.upgrade() {
+                    set_role_error(&window, role, &error.to_string());
+                }
+            }
+        });
+
+        let service = Rc::clone(bluetooth_service);
+        let window_weak = window.as_weak();
+        window.on_disconnect_device(move |role_index| {
+            let Some(role) = role_from_index(role_index) else {
+                return;
+            };
+            if let Err(error) = service.disconnect(role) {
+                if let Some(window) = window_weak.upgrade() {
+                    set_role_error(&window, role, &error.to_string());
+                }
+            }
+        });
+
+        let service = Rc::clone(bluetooth_service);
+        let window_weak = window.as_weak();
+        let event_devices_model = Rc::clone(&discovered_devices);
+        let state = Rc::clone(&state);
+        discovery_timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(100),
+            move || {
+                let Some(window) = window_weak.upgrade() else {
+                    return;
+                };
+
+                while let Ok(event) = service.try_recv() {
+                    handle_discovery_event(&window, &event_devices_model, &state, event);
+                }
+            },
+        );
+    }
+
+    window.run()
+}
+
+fn handle_discovery_event(
+    window: &AppWindow,
+    devices: &Rc<VecModel<DeviceListItem>>,
+    state: &Rc<RefCell<AppState>>,
+    event: DiscoveryEvent,
+) {
+    match event {
+        DiscoveryEvent::ScanStarted => {
+            window.set_device_scan_error(false);
+            window.set_device_scan_running(true);
+            window.set_device_scan_status("Scanning for compatible devices...".into());
+        }
+        DiscoveryEvent::DeviceDiscovered(device) => {
+            let capabilities = device.capabilities;
+            devices.push(DeviceListItem {
+                id: SharedString::from(device.id.as_str()),
+                name: SharedString::from(device.name),
+                capabilities: SharedString::from(capabilities_label(capabilities)),
+                signal: SharedString::from(signal_label(device.signal_strength)),
+                supports_power: capabilities.power,
+                supports_heart_rate: capabilities.heart_rate,
+                supports_cadence: capabilities.cadence,
+                supports_smart_trainer: capabilities.smart_trainer,
+            });
+        }
+        DiscoveryEvent::ScanFinished => {
+            window.set_device_scan_running(false);
+            if window.get_device_scan_error() {
+                return;
+            }
+
+            let count = devices.row_count();
+            let status = match count {
+                0 => "Scan complete. No compatible devices found.".to_owned(),
+                1 => "Scan complete. Found 1 compatible device.".to_owned(),
+                _ => format!("Scan complete. Found {count} compatible devices."),
+            };
+            window.set_device_scan_status(status.into());
+        }
+        DiscoveryEvent::Error(error) => {
+            window.set_device_scan_error(true);
+            window.set_device_scan_running(false);
+            window.set_device_scan_status(format!("Error: {error}").into());
+        }
+        DiscoveryEvent::RoleConnecting { role, device_id } => {
+            set_role_connecting(window, role, device_id.as_str());
+        }
+        DiscoveryEvent::RoleConnected { role, device_id } => {
+            if role == DeviceRole::SmartTrainer {
+                let mut state = state.borrow_mut();
+                state.smart_trainer_connected = true;
+                state.erg_enabled = false;
+                state.erg_command_pending = false;
+                state.erg_target_watts = None;
+                state.erg_error = None;
+            }
+            set_role_connected(window, role, device_id.as_str());
+            render(window, &state.borrow());
+        }
+        DiscoveryEvent::Measurement { role, measurement } => {
+            handle_measurement(window, state, role, measurement);
+        }
+        DiscoveryEvent::RoleDisconnected { role, .. } => {
+            clear_role_measurement(state, role);
+            if role == DeviceRole::SmartTrainer {
+                clear_erg_state(&mut state.borrow_mut());
+            }
+            set_role_disconnected(window, role);
+            render(window, &state.borrow());
+        }
+        DiscoveryEvent::RoleError { role, message } => {
+            clear_role_measurement(state, role);
+            if role == DeviceRole::SmartTrainer {
+                clear_erg_state(&mut state.borrow_mut());
+            }
+            set_role_error(window, role, &message);
+            render(window, &state.borrow());
+        }
+        DiscoveryEvent::ErgModeChanged {
+            enabled,
+            target_power_watts,
+        } => {
+            let mut state = state.borrow_mut();
+            state.erg_enabled = enabled;
+            state.erg_command_pending = false;
+            state.erg_target_watts = target_power_watts;
+            state.erg_error = None;
+            render(window, &state);
+        }
+        DiscoveryEvent::TrainerControlError(message) => {
+            let mut state = state.borrow_mut();
+            state.erg_command_pending = false;
+            state.erg_target_watts = None;
+            state.erg_error = Some(message);
+            render(window, &state);
+        }
+    }
+}
+
+fn capabilities_label(capabilities: DeviceCapabilities) -> String {
+    let mut labels = Vec::new();
+    if capabilities.power {
+        labels.push("Power");
+    }
+    if capabilities.heart_rate {
+        labels.push("Heart rate");
+    }
+    if capabilities.cadence {
+        labels.push("RPM");
+    }
+    if capabilities.smart_trainer {
+        labels.push("Smart trainer");
+    }
+    labels.join(" / ")
+}
+
+fn signal_label(signal_strength: Option<i16>) -> String {
+    signal_strength
+        .map(|rssi| format!("{rssi} dBm"))
+        .unwrap_or_else(|| "Signal unknown".to_owned())
+}
+
+fn role_from_index(index: i32) -> Option<DeviceRole> {
+    match index {
+        0 => Some(DeviceRole::PowerSource),
+        1 => Some(DeviceRole::SecondaryPowerSource),
+        2 => Some(DeviceRole::HeartRate),
+        3 => Some(DeviceRole::Cadence),
+        4 => Some(DeviceRole::SmartTrainer),
+        _ => None,
+    }
+}
+
+fn set_role_connecting(window: &AppWindow, role: DeviceRole, device_id: &str) {
+    match role {
+        DeviceRole::PowerSource => {
+            window.set_connecting_power_id(device_id.into());
+            window.set_power_connection_error(false);
+            window.set_power_connection_status("Connecting...".into());
+        }
+        DeviceRole::SecondaryPowerSource => {
+            window.set_connecting_secondary_power_id(device_id.into());
+            window.set_secondary_power_connection_error(false);
+            window.set_secondary_power_connection_status("Connecting...".into());
+        }
+        DeviceRole::HeartRate => {
+            window.set_connecting_heart_rate_id(device_id.into());
+            window.set_heart_rate_connection_error(false);
+            window.set_heart_rate_connection_status("Connecting...".into());
+        }
+        DeviceRole::Cadence => {
+            window.set_connecting_cadence_id(device_id.into());
+            window.set_cadence_connection_error(false);
+            window.set_cadence_connection_status("Connecting...".into());
+        }
+        DeviceRole::SmartTrainer => {
+            window.set_connecting_smart_trainer_id(device_id.into());
+            window.set_smart_trainer_connection_error(false);
+            window.set_smart_trainer_connection_status("Connecting...".into());
+        }
+    }
+}
+
+fn set_role_connected(window: &AppWindow, role: DeviceRole, device_id: &str) {
+    match role {
+        DeviceRole::PowerSource => {
+            window.set_connecting_power_id("".into());
+            window.set_connected_power_id(device_id.into());
+            window.set_power_connection_error(false);
+            window.set_power_connection_status("Connected, waiting for data...".into());
+        }
+        DeviceRole::SecondaryPowerSource => {
+            window.set_connecting_secondary_power_id("".into());
+            window.set_connected_secondary_power_id(device_id.into());
+            window.set_secondary_power_connection_error(false);
+            window.set_secondary_power_connection_status("Connected, waiting for data...".into());
+        }
+        DeviceRole::HeartRate => {
+            window.set_connecting_heart_rate_id("".into());
+            window.set_connected_heart_rate_id(device_id.into());
+            window.set_heart_rate_connection_error(false);
+            window.set_heart_rate_connection_status("Connected, waiting for data...".into());
+        }
+        DeviceRole::Cadence => {
+            window.set_connecting_cadence_id("".into());
+            window.set_connected_cadence_id(device_id.into());
+            window.set_cadence_connection_error(false);
+            window.set_cadence_connection_status("Connected, waiting for data...".into());
+        }
+        DeviceRole::SmartTrainer => {
+            window.set_connecting_smart_trainer_id("".into());
+            window.set_connected_smart_trainer_id(device_id.into());
+            window.set_smart_trainer_connection_error(false);
+            window.set_smart_trainer_connection_status("Connected".into());
+        }
+    }
+}
+
+fn set_role_disconnected(window: &AppWindow, role: DeviceRole) {
+    match role {
+        DeviceRole::PowerSource => {
+            window.set_connecting_power_id("".into());
+            window.set_connected_power_id("".into());
+            window.set_live_power_watts(0);
+            window.set_power_connection_error(false);
+            window.set_power_connection_status("No primary power source connected".into());
+        }
+        DeviceRole::SecondaryPowerSource => {
+            window.set_connecting_secondary_power_id("".into());
+            window.set_connected_secondary_power_id("".into());
+            window.set_live_secondary_power_watts(0);
+            window.set_secondary_power_connection_error(false);
+            window.set_secondary_power_connection_status(
+                "No secondary power source connected".into(),
+            );
+        }
+        DeviceRole::HeartRate => {
+            window.set_connecting_heart_rate_id("".into());
+            window.set_connected_heart_rate_id("".into());
+            window.set_live_heart_rate_bpm(0);
+            window.set_heart_rate_connection_error(false);
+            window.set_heart_rate_connection_status("No heart rate monitor connected".into());
+        }
+        DeviceRole::Cadence => {
+            window.set_connecting_cadence_id("".into());
+            window.set_connected_cadence_id("".into());
+            window.set_live_cadence_rpm(0);
+            window.set_cadence_connection_error(false);
+            window.set_cadence_connection_status("No cadence source connected".into());
+        }
+        DeviceRole::SmartTrainer => {
+            window.set_connecting_smart_trainer_id("".into());
+            window.set_connected_smart_trainer_id("".into());
+            window.set_smart_trainer_connection_error(false);
+            window.set_smart_trainer_connection_status("No smart trainer connected".into());
+        }
+    }
+}
+
+fn set_role_error(window: &AppWindow, role: DeviceRole, message: &str) {
+    set_role_disconnected(window, role);
+    let status = format!("Error: {message}");
+    match role {
+        DeviceRole::PowerSource => {
+            window.set_power_connection_error(true);
+            window.set_power_connection_status(status.into());
+        }
+        DeviceRole::SecondaryPowerSource => {
+            window.set_secondary_power_connection_error(true);
+            window.set_secondary_power_connection_status(status.into());
+        }
+        DeviceRole::HeartRate => {
+            window.set_heart_rate_connection_error(true);
+            window.set_heart_rate_connection_status(status.into());
+        }
+        DeviceRole::Cadence => {
+            window.set_cadence_connection_error(true);
+            window.set_cadence_connection_status(status.into());
+        }
+        DeviceRole::SmartTrainer => {
+            window.set_smart_trainer_connection_error(true);
+            window.set_smart_trainer_connection_status(status.into());
+        }
+    }
+}
+
+fn handle_measurement(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    role: DeviceRole,
+    measurement: DeviceMeasurement,
+) {
+    match (role, measurement) {
+        (DeviceRole::PowerSource, DeviceMeasurement::PowerWatts(value)) => {
+            state.borrow_mut().external_power_watts = Some(value);
+            window.set_live_power_watts(i32::from(value.max(0)));
+            window.set_power_watts(i32::from(value.max(0)));
+            window.set_power_connection_status("Connected and receiving data".into());
+        }
+        (DeviceRole::SecondaryPowerSource, DeviceMeasurement::PowerWatts(value)) => {
+            state.borrow_mut().secondary_power_watts = Some(value);
+            window.set_live_secondary_power_watts(i32::from(value.max(0)));
+            window.set_secondary_power_watts(i32::from(value.max(0)));
+            window.set_secondary_power_connection_status("Connected and receiving data".into());
+        }
+        (DeviceRole::HeartRate, DeviceMeasurement::HeartRateBpm(value)) => {
+            state.borrow_mut().external_heart_rate_bpm = Some(value);
+            window.set_live_heart_rate_bpm(i32::from(value));
+            window.set_heart_rate_bpm(i32::from(value));
+            window.set_heart_rate_connection_status("Connected and receiving data".into());
+        }
+        (DeviceRole::Cadence, DeviceMeasurement::CadenceRpm(value)) => {
+            state.borrow_mut().external_cadence_rpm = Some(value);
+            window.set_live_cadence_rpm(i32::from(value));
+            window.set_cadence_rpm(i32::from(value));
+            window.set_cadence_connection_status("Connected and receiving data".into());
+        }
+        _ => {}
+    }
+}
+
+fn clear_role_measurement(state: &Rc<RefCell<AppState>>, role: DeviceRole) {
+    let mut state = state.borrow_mut();
+    match role {
+        DeviceRole::PowerSource => state.external_power_watts = None,
+        DeviceRole::SecondaryPowerSource => state.secondary_power_watts = None,
+        DeviceRole::HeartRate => state.external_heart_rate_bpm = None,
+        DeviceRole::Cadence => state.external_cadence_rpm = None,
+        DeviceRole::SmartTrainer => {}
+    }
+}
+
+fn start_ride(window: &slint::Weak<AppWindow>, state: &Rc<RefCell<AppState>>) {
+    let mut state = state.borrow_mut();
+    state.running = true;
+    state.workout.start();
+
+    if let Some(window) = window.upgrade() {
+        window.set_ride_status("Riding".into());
+    }
+}
+
+fn tick(
+    window: &AppWindow,
+    state: &Rc<RefCell<AppState>>,
+    bluetooth_service: Option<&BluetoothDeviceService>,
+) {
+    let mut state = state.borrow_mut();
+    if !state.running {
+        return;
+    }
+
+    let phase = state.workout.tick();
+    match phase {
+        WorkoutPhase::Active { step, .. } => {
+            let ftp_watts = state.ftp_watts;
+            let _ = state
+                .trainer
+                .set_target_power(step.target_power_watts(ftp_watts));
+            sync_erg_target(&mut state, bluetooth_service);
+        }
+        WorkoutPhase::Finished => {
+            state.running = false;
+            state.workout.pause();
+            disable_erg(&mut state, bluetooth_service);
+            window.set_ride_status("Finished".into());
+            render(window, &state);
+            return;
+        }
+        WorkoutPhase::NotStarted => {}
+    }
+
+    if let Ok(mut sample) = state.trainer.next_sample() {
+        if let Some(power_watts) = state.external_power_watts {
+            sample.power_watts = u16::try_from(power_watts.max(0)).unwrap_or_default();
+        }
+        if let Some(cadence_rpm) = state.external_cadence_rpm {
+            sample.cadence_rpm = cadence_rpm;
+        }
+        if let Some(heart_rate_bpm) = state.external_heart_rate_bpm {
+            sample.heart_rate_bpm = u8::try_from(heart_rate_bpm).ok();
+        }
+        state.recorder.push(sample);
+    }
+
+    render(window, &state);
+}
+
+fn render(window: &AppWindow, state: &AppState) {
+    let stats = state.recorder.stats();
+    let latest = state.recorder.latest();
+    let phase = state.workout.phase();
+
+    window.set_workout_name(state.workout.workout().name.clone().into());
+    window.set_ftp_watts(i32::from(state.ftp_watts));
+    window.set_erg_enabled(state.erg_enabled);
+    window.set_erg_available(
+        state.smart_trainer_connected
+            && (state.erg_enabled || current_target_power(state).is_some()),
+    );
+    window.set_erg_pending(state.erg_command_pending);
+    window.set_erg_error(state.erg_error.is_some());
+    if let Some(error) = &state.erg_error {
+        window.set_erg_status(format!("ERG error: {error}").into());
+    } else if !state.smart_trainer_connected {
+        window.set_erg_status("Connect a smart trainer".into());
+    } else if state.erg_command_pending {
+        window.set_erg_status("Updating ERG...".into());
+    } else if state.erg_enabled {
+        window.set_erg_status(
+            format!(
+                "ERG holding {} W",
+                state.erg_target_watts.unwrap_or_default()
+            )
+            .into(),
+        );
+    } else {
+        window.set_erg_status("ERG mode off".into());
+    }
+    window.set_elapsed_text(format_duration(stats.elapsed_secs).into());
+    window.set_power_watts(
+        state
+            .external_power_watts
+            .map(|value| i32::from(value.max(0)))
+            .or_else(|| latest.map(|sample| i32::from(sample.power_watts)))
+            .unwrap_or_default(),
+    );
+    window.set_secondary_power_watts(
+        state
+            .secondary_power_watts
+            .map(|value| i32::from(value.max(0)))
+            .unwrap_or_default(),
+    );
+    window.set_cadence_rpm(
+        state
+            .external_cadence_rpm
+            .map(i32::from)
+            .or_else(|| latest.map(|sample| i32::from(sample.cadence_rpm)))
+            .unwrap_or_default(),
+    );
+    window.set_heart_rate_bpm(
+        state
+            .external_heart_rate_bpm
+            .map(i32::from)
+            .or_else(|| {
+                latest
+                    .and_then(|sample| sample.heart_rate_bpm)
+                    .map(i32::from)
+            })
+            .unwrap_or_default(),
+    );
+    window.set_average_power_text(format!("{:.0} W", stats.average_power_watts).into());
+    render_workout(window, state, &phase);
+}
+
+fn apply_current_target(state: &mut AppState) {
+    let WorkoutPhase::Active { step, .. } = state.workout.phase() else {
+        return;
+    };
+
+    let _ = state
+        .trainer
+        .set_target_power(step.target_power_watts(state.ftp_watts));
+}
+
+fn current_target_power(state: &AppState) -> Option<u16> {
+    match state.workout.phase() {
+        WorkoutPhase::Active { step, .. } => Some(step.target_power_watts(state.ftp_watts)),
+        WorkoutPhase::NotStarted => state
+            .workout
+            .workout()
+            .steps
+            .first()
+            .map(|step| step.target_power_watts(state.ftp_watts)),
+        WorkoutPhase::Finished => None,
+    }
+}
+
+fn sync_erg_target(state: &mut AppState, bluetooth_service: Option<&BluetoothDeviceService>) {
+    if !state.erg_enabled || state.erg_command_pending {
+        return;
+    }
+    let Some(target_power_watts) = current_target_power(state) else {
+        return;
+    };
+    if state.erg_target_watts == Some(target_power_watts) {
+        return;
+    }
+    let Some(bluetooth_service) = bluetooth_service else {
+        return;
+    };
+
+    if bluetooth_service
+        .set_erg_target_power(target_power_watts)
+        .is_ok()
+    {
+        state.erg_command_pending = true;
+        state.erg_target_watts = Some(target_power_watts);
+        state.erg_error = None;
+    }
+}
+
+fn disable_erg(state: &mut AppState, bluetooth_service: Option<&BluetoothDeviceService>) {
+    if !state.erg_enabled || state.erg_command_pending {
+        return;
+    }
+    let Some(bluetooth_service) = bluetooth_service else {
+        return;
+    };
+
+    match bluetooth_service.set_erg_mode(false, 0) {
+        Ok(()) => {
+            state.erg_command_pending = true;
+            state.erg_error = None;
+        }
+        Err(error) => state.erg_error = Some(error.to_string()),
+    }
+}
+
+fn clear_erg_state(state: &mut AppState) {
+    state.smart_trainer_connected = false;
+    state.erg_enabled = false;
+    state.erg_command_pending = false;
+    state.erg_target_watts = None;
+    state.erg_error = None;
+}
+
+fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
+    let workout = state.workout.workout();
+    let (active_index, active_elapsed_secs) = match phase {
+        WorkoutPhase::Active {
+            step_index,
+            step_elapsed_secs,
+            ..
+        } => (Some(*step_index), *step_elapsed_secs),
+        _ => (None, 0),
+    };
+
+    let stages = workout
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let completed =
+                matches!(phase, WorkoutPhase::Finished) || active_index.is_some_and(|i| index < i);
+            let active = active_index == Some(index);
+            let progress_percent = if completed {
+                100
+            } else if active {
+                ((active_elapsed_secs.saturating_mul(100) / step.duration_secs.max(1)).min(100))
+                    as i32
+            } else {
+                0
+            };
+
+            WorkoutStageItem {
+                name: step.name.clone().into(),
+                duration_secs: i32::try_from(step.duration_secs).unwrap_or(i32::MAX),
+                duration_text: format_duration(step.duration_secs).into(),
+                target_percent: i32::from(step.target_ftp_percent),
+                target_watts: i32::from(step.target_power_watts(state.ftp_watts)),
+                progress_percent,
+                active,
+                completed,
+            }
+        })
+        .collect::<Vec<_>>();
+    window.set_workout_stages(ModelRc::from(Rc::new(VecModel::from(stages))));
+
+    match phase {
+        WorkoutPhase::NotStarted => {
+            let first_step = workout.steps.first();
+            window.set_current_step(
+                first_step
+                    .map(|step| step.name.as_str())
+                    .unwrap_or("No workout stages")
+                    .into(),
+            );
+            window.set_target_power_watts(
+                first_step
+                    .map(|step| i32::from(step.target_power_watts(state.ftp_watts)))
+                    .unwrap_or_default(),
+            );
+            window.set_workout_status(
+                first_step
+                    .map(|step| {
+                        format!(
+                            "Ready: {} at {} W ({}% FTP)",
+                            step.name,
+                            step.target_power_watts(state.ftp_watts),
+                            step.target_ftp_percent
+                        )
+                    })
+                    .unwrap_or_else(|| "No workout stages".to_owned())
+                    .into(),
+            );
+            window.set_can_go_previous_stage(false);
+            window.set_can_skip_stage(first_step.is_some());
+        }
+        WorkoutPhase::Active {
+            step_index,
+            step_elapsed_secs,
+            step,
+        } => {
+            let remaining_secs = step.duration_secs.saturating_sub(*step_elapsed_secs);
+            let target_watts = step.target_power_watts(state.ftp_watts);
+            window.set_current_step(step.name.clone().into());
+            window.set_target_power_watts(i32::from(target_watts));
+            window.set_workout_status(
+                format!(
+                    "Stage {} of {}: {} | {} remaining | {} W ({}% FTP)",
+                    step_index + 1,
+                    workout.steps.len(),
+                    step.name,
+                    format_duration(remaining_secs),
+                    target_watts,
+                    step.target_ftp_percent
+                )
+                .into(),
+            );
+            window.set_can_go_previous_stage(*step_index > 0);
+            window.set_can_skip_stage(true);
+        }
+        WorkoutPhase::Finished => {
+            window.set_current_step("Workout complete".into());
+            window.set_target_power_watts(0);
+            window.set_workout_status("Workout complete".into());
+            window.set_can_go_previous_stage(!workout.steps.is_empty());
+            window.set_can_skip_stage(false);
+        }
+    }
+}
+
+fn format_duration(total_secs: u64) -> String {
+    let minutes = total_secs / 60;
+    let seconds = total_secs % 60;
+    format!("{minutes:02}:{seconds:02}")
+}
