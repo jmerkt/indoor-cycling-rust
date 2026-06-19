@@ -2,7 +2,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use indoor_cycling_core::{RideRecorder, Workout, WorkoutEngine, WorkoutPhase};
+use indoor_cycling_core::{
+    EffortDuration, RideRecorder, Workout, WorkoutDifficulty, WorkoutEngine, WorkoutParameters,
+    WorkoutPhase,
+};
 use indoor_cycling_devices::{
     BluetoothDeviceService, DeviceCapabilities, DeviceId, DeviceMeasurement, DeviceRole,
     DiscoveryEvent, SimulatedTrainer, TrainerDevice,
@@ -57,7 +60,7 @@ impl AppState {
         let mut trainer = SimulatedTrainer::new();
         trainer.connect().expect("simulated trainer should connect");
         self.recorder = RideRecorder::new();
-        self.workout = WorkoutEngine::new(Workout::endurance_sample());
+        self.workout.reset();
         self.trainer = trainer;
         self.running = false;
     }
@@ -114,6 +117,44 @@ fn main() -> Result<(), slint::PlatformError> {
                 render(&window, &state);
             }
         });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_randomize_workout(
+            move |length_minutes, difficulty, effort_duration, variation| {
+                let parameters = WorkoutParameters {
+                    duration_minutes: u16::try_from(length_minutes.clamp(15, 180)).unwrap_or(45),
+                    difficulty: match difficulty {
+                        0 => WorkoutDifficulty::Gentle,
+                        1 => WorkoutDifficulty::Easy,
+                        3 => WorkoutDifficulty::Hard,
+                        4 => WorkoutDifficulty::VeryHard,
+                        _ => WorkoutDifficulty::Moderate,
+                    },
+                    effort_duration: match effort_duration {
+                        0 => EffortDuration::VeryShort,
+                        1 => EffortDuration::Short,
+                        3 => EffortDuration::Long,
+                        4 => EffortDuration::VeryLong,
+                        _ => EffortDuration::Medium,
+                    },
+                    variation: u8::try_from(variation.clamp(1, 5)).unwrap_or(2),
+                };
+                let mut state = state.borrow_mut();
+                state.running = false;
+                state.recorder = RideRecorder::new();
+                state.workout = WorkoutEngine::new(Workout::randomized(parameters));
+                apply_current_target(&mut state);
+                sync_erg_target(&mut state, bluetooth_service.as_deref());
+                if let Some(window) = window_weak.upgrade() {
+                    window.set_ride_status("Ready".into());
+                    render(&window, &state);
+                }
+            },
+        );
     }
 
     {

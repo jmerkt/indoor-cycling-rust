@@ -1,4 +1,4 @@
-import { ScrollView, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { ScrollView, Slider, VerticalBox, HorizontalBox } from "std-widgets.slint";
 
 export struct DeviceListItem {
     id: string,
@@ -74,6 +74,30 @@ component MenuButton inherits Rectangle {
     touch := TouchArea {
         clicked => { root.clicked(); }
     }
+}
+
+component ChoiceButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked();
+
+    min-width: 104px;
+    min-height: 38px;
+    background: root.selected ? #0f766e : touch.has-hover ? #eef1f4 : white;
+    border-color: root.selected ? #0f766e : #c7ced6;
+    border-width: 1px;
+    border-radius: 5px;
+
+    Text {
+        text: root.text;
+        color: root.selected ? white : #17202a;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea { clicked => { root.clicked(); } }
 }
 
 component FtpStepButton inherits Rectangle {
@@ -319,8 +343,20 @@ component WorkoutStageBlock inherits Rectangle {
 
     min-width: 112px;
     min-height: 118px;
-    background: root.active ? #ecfdf5 : root.completed ? #f0fdfa : #f8fafc;
-    border-color: root.active ? #0f766e : #d8dde3;
+    // FTP-relative training zones: recovery, endurance (Zone 2), tempo,
+    // sweet spot, threshold, VO2 max, and anaerobic capacity.
+    background: root.target-percent <= 55 ? #e2e8f0
+        : root.target-percent <= 75 ? #dbeafe
+        : root.target-percent <= 87 ? #dcfce7
+        : root.target-percent <= 94 ? #fef3c7
+        : root.target-percent <= 105 ? #ffedd5
+        : root.target-percent <= 120 ? #fee2e2 : #f3e8ff;
+    border-color: root.target-percent <= 55 ? #64748b
+        : root.target-percent <= 75 ? #2563eb
+        : root.target-percent <= 87 ? #16a34a
+        : root.target-percent <= 94 ? #ca8a04
+        : root.target-percent <= 105 ? #ea580c
+        : root.target-percent <= 120 ? #dc2626 : #9333ea;
     border-width: root.active ? 3px : 1px;
     border-radius: 6px;
 
@@ -351,6 +387,24 @@ component WorkoutStageBlock inherits Rectangle {
             font-size: 12px;
             horizontal-alignment: center;
         }
+
+        Text {
+            text: root.target-percent <= 55 ? "Recovery"
+                : root.target-percent <= 75 ? "Zone 2"
+                : root.target-percent <= 87 ? "Tempo"
+                : root.target-percent <= 94 ? "Sweet Spot"
+                : root.target-percent <= 105 ? "Threshold"
+                : root.target-percent <= 120 ? "VO2 Max" : "Anaerobic";
+            color: root.target-percent <= 55 ? #475569
+                : root.target-percent <= 75 ? #1d4ed8
+                : root.target-percent <= 87 ? #15803d
+                : root.target-percent <= 94 ? #a16207
+                : root.target-percent <= 105 ? #c2410c
+                : root.target-percent <= 120 ? #b91c1c : #7e22ce;
+            font-size: 11px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
     }
 
     Rectangle {
@@ -358,7 +412,12 @@ component WorkoutStageBlock inherits Rectangle {
         y: parent.height - 7px;
         width: parent.width * root.progress-percent / 100;
         height: 7px;
-        background: #14b8a6;
+        background: root.target-percent <= 55 ? #64748b
+            : root.target-percent <= 75 ? #2563eb
+            : root.target-percent <= 87 ? #16a34a
+            : root.target-percent <= 94 ? #ca8a04
+            : root.target-percent <= 105 ? #ea580c
+            : root.target-percent <= 120 ? #dc2626 : #9333ea;
         border-radius: 3px;
     }
 }
@@ -487,8 +546,13 @@ export component AppWindow inherits Window {
     callback scan-devices();
     callback connect-device(string, int);
     callback disconnect-device(int);
+    callback randomize-workout(int, int, int, int);
 
     private property <int> current-page: 0;
+    private property <int> draft-length-minutes: 45;
+    private property <int> draft-difficulty: 2;
+    private property <int> draft-effort-duration: 2;
+    private property <int> draft-variation: 2;
 
     background: #f7f8fa;
 
@@ -525,6 +589,12 @@ export component AppWindow inherits Window {
                     text: "Devices";
                     selected: root.current-page == 1;
                     clicked => { root.current-page = 1; }
+                }
+
+                MenuButton {
+                    text: "Workout";
+                    selected: root.current-page == 2;
+                    clicked => { root.current-page = 2; }
                 }
             }
         }
@@ -594,18 +664,29 @@ export component AppWindow inherits Window {
                             font-weight: 600;
                         }
 
-                        HorizontalBox {
-                            spacing: 6px;
+                        stage-scroll := ScrollView {
+                            // A long interval plan remains a readable timeline instead
+                            // of squeezing every stage into the available width.
+                            viewport-width: max(self.visible-width, stage-row.preferred-width);
+                            viewport-height: self.visible-height;
+                            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
 
-                            for stage in root.workout-stages : WorkoutStageBlock {
-                                horizontal-stretch: stage.duration-secs;
-                                stage-name: stage.name;
-                                duration-text: stage.duration-text;
-                                target-percent: stage.target-percent;
-                                target-watts: stage.target-watts;
-                                progress-percent: stage.progress-percent;
-                                active: stage.active;
-                                completed: stage.completed;
+                            stage-row := HorizontalBox {
+                                width: stage-scroll.viewport-width;
+                                height: stage-scroll.viewport-height;
+                                spacing: 6px;
+
+                                for stage in root.workout-stages : WorkoutStageBlock {
+                                    horizontal-stretch: stage.duration-secs;
+                                    min-width: max(112px, stage.duration-secs * 0.22px);
+                                    stage-name: stage.name;
+                                    duration-text: stage.duration-text;
+                                    target-percent: stage.target-percent;
+                                    target-watts: stage.target-watts;
+                                    progress-percent: stage.progress-percent;
+                                    active: stage.active;
+                                    completed: stage.completed;
+                                }
                             }
                         }
                     }
@@ -967,6 +1048,169 @@ export component AppWindow inherits Window {
                                         root.connect-device(device.id, 4);
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.current-page == 2 : workout-scroll := ScrollView {
+            viewport-width: max(self.visible-width, workout-content.preferred-width);
+            viewport-height: max(self.visible-height, workout-content.preferred-height);
+
+            workout-content := VerticalBox {
+                width: workout-scroll.viewport-width;
+                height: workout-scroll.viewport-height;
+                padding: 24px;
+                spacing: 18px;
+
+                Text {
+                    text: "Workout Builder";
+                    color: #17202a;
+                    font-size: 30px;
+                    font-weight: 700;
+                }
+
+                Text {
+                    text: "Build a varied interval session around your FTP. A warmup and cooldown are always included.";
+                    color: #53616f;
+                    font-size: 16px;
+                }
+
+                FtpControl {
+                    value: root.ftp-watts;
+                    changed(value) => { root.set-ftp(value); }
+                }
+
+                Rectangle {
+                    background: white;
+                    border-color: #d8dde3;
+                    border-width: 1px;
+                    border-radius: 8px;
+
+                    VerticalBox {
+                        padding: 20px;
+                        spacing: 16px;
+
+                        HorizontalBox {
+                            spacing: 18px;
+
+                            VerticalBox {
+                                spacing: 8px;
+                                Text { text: "Total length"; color: #334155; font-size: 15px; font-weight: 700; }
+                                HorizontalBox {
+                                    spacing: 12px;
+                                    Slider {
+                                        minimum: 15;
+                                        maximum: 180;
+                                        step: 5;
+                                        value: root.draft-length-minutes;
+                                        changed(value) => { root.draft-length-minutes = round(value); }
+                                        min-width: 220px;
+                                    }
+                                    Text {
+                                        text: root.draft-length-minutes + " min";
+                                        color: #0f766e;
+                                        font-size: 22px;
+                                        font-weight: 800;
+                                        min-width: 80px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            VerticalBox {
+                                spacing: 8px;
+                                Text { text: "Difficulty"; color: #334155; font-size: 15px; font-weight: 700; }
+                                HorizontalBox {
+                                    spacing: 6px;
+                                    ChoiceButton { text: "Gentle"; selected: root.draft-difficulty == 0; clicked => { root.draft-difficulty = 0; } }
+                                    ChoiceButton { text: "Easy"; selected: root.draft-difficulty == 1; clicked => { root.draft-difficulty = 1; } }
+                                    ChoiceButton { text: "Moderate"; selected: root.draft-difficulty == 2; clicked => { root.draft-difficulty = 2; } }
+                                    ChoiceButton { text: "Hard"; selected: root.draft-difficulty == 3; clicked => { root.draft-difficulty = 3; } }
+                                    ChoiceButton { text: "Very hard"; selected: root.draft-difficulty == 4; clicked => { root.draft-difficulty = 4; } }
+                                }
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 8px;
+                            Text { text: "Effort duration"; color: #334155; font-size: 15px; font-weight: 700; }
+                            HorizontalBox {
+                                spacing: 6px;
+                                ChoiceButton { text: "Very short"; selected: root.draft-effort-duration == 0; clicked => { root.draft-effort-duration = 0; } }
+                                ChoiceButton { text: "Short"; selected: root.draft-effort-duration == 1; clicked => { root.draft-effort-duration = 1; } }
+                                ChoiceButton { text: "Medium"; selected: root.draft-effort-duration == 2; clicked => { root.draft-effort-duration = 2; } }
+                                ChoiceButton { text: "Long"; selected: root.draft-effort-duration == 3; clicked => { root.draft-effort-duration = 3; } }
+                                ChoiceButton { text: "Very long"; selected: root.draft-effort-duration == 4; clicked => { root.draft-effort-duration = 4; } }
+                            }
+                            Text {
+                                text: root.draft-effort-duration == 0
+                                    ? "Very short efforts are punchy, with easy recovery between every interval."
+                                    : root.draft-effort-duration == 1
+                                        ? "Short efforts alternate harder work with recovery."
+                                        : root.draft-effort-duration == 2
+                                            ? "Medium efforts balance steady work and recovery."
+                                            : "Long efforts focus on sustained work and muscular endurance.";
+                                color: #64748b;
+                                font-size: 13px;
+                            }
+                        }
+
+                        VerticalBox {
+                            spacing: 8px;
+                            Text { text: "Variation"; color: #334155; font-size: 15px; font-weight: 700; }
+                            HorizontalBox {
+                                spacing: 6px;
+                                ChoiceButton { text: "Minimal"; selected: root.draft-variation == 1; clicked => { root.draft-variation = 1; } }
+                                ChoiceButton { text: "Subtle"; selected: root.draft-variation == 2; clicked => { root.draft-variation = 2; } }
+                                ChoiceButton { text: "Varied"; selected: root.draft-variation == 3; clicked => { root.draft-variation = 3; } }
+                                ChoiceButton { text: "High"; selected: root.draft-variation == 4; clicked => { root.draft-variation = 4; } }
+                                ChoiceButton { text: "Wild"; selected: root.draft-variation == 5; clicked => { root.draft-variation = 5; } }
+                            }
+                        }
+
+                        ActionButton {
+                            text: "Randomize and activate workout";
+                            max-width: 290px;
+                            clicked => {
+                                root.randomize-workout(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation);
+                            }
+                        }
+                    }
+                }
+
+                Text { text: "Active workout: " + root.workout-name; color: #17202a; font-size: 20px; font-weight: 700; }
+
+                Rectangle {
+                    background: white;
+                    border-color: #d8dde3;
+                    border-width: 1px;
+                    border-radius: 8px;
+                    min-height: 150px;
+
+                    preview-scroll := ScrollView {
+                        viewport-width: max(self.visible-width, preview-row.preferred-width);
+                        viewport-height: self.visible-height;
+                        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+
+                        preview-row := HorizontalBox {
+                            width: preview-scroll.viewport-width;
+                            height: preview-scroll.viewport-height;
+                            padding: 16px;
+                            spacing: 8px;
+                            for stage in root.workout-stages : WorkoutStageBlock {
+                                horizontal-stretch: stage.duration-secs;
+                                min-width: max(112px, stage.duration-secs * 0.22px);
+                                stage-name: stage.name;
+                                duration-text: stage.duration-text;
+                                target-percent: stage.target-percent;
+                                target-watts: stage.target-watts;
+                                progress-percent: 0;
+                                active: false;
+                                completed: false;
                             }
                         }
                     }
