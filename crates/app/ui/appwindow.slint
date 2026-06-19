@@ -418,8 +418,10 @@ component RoleStatus inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "Indoor Cycling";
-    width: 900px;
-    height: 720px;
+    preferred-width: 900px;
+    preferred-height: 720px;
+    min-width: 640px;
+    min-height: 480px;
 
     in property <string> workout-name;
     in property <string> ride-status;
@@ -533,6 +535,10 @@ export component AppWindow inherits Window {
 
             dashboard := VerticalBox {
                 width: dashboard-scroll.viewport-width;
+                // Keep the dashboard as large as the visible viewport. Without an
+                // explicit height it remains at its content height, which leaves a
+                // blank area when the window is enlarged.
+                height: dashboard-scroll.viewport-height;
                 padding: 24px;
                 spacing: 18px;
 
@@ -575,6 +581,7 @@ export component AppWindow inherits Window {
                     border-width: 1px;
                     border-radius: 8px;
                     min-height: 192px;
+                    vertical-stretch: 1;
 
                     VerticalBox {
                         padding: 16px;
@@ -610,6 +617,7 @@ export component AppWindow inherits Window {
                     border-width: 1px;
                     border-radius: 8px;
                     min-height: 250px;
+                    vertical-stretch: 2;
 
                     HorizontalBox {
                         padding: 24px;
@@ -645,6 +653,7 @@ export component AppWindow inherits Window {
 
                 HorizontalBox {
                     spacing: 18px;
+                    vertical-stretch: 1;
 
                     Rectangle {
                         background: white;
@@ -727,6 +736,9 @@ export component AppWindow inherits Window {
 
             devices-content := VerticalBox {
                 width: devices-scroll.viewport-width;
+                // Fill a larger window while retaining the preferred height as the
+                // scrollable minimum when there are many devices.
+                height: devices-scroll.viewport-height;
                 padding: 24px;
                 spacing: 18px;
 
