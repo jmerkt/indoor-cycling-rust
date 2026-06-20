@@ -477,8 +477,8 @@ component RoleStatus inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "Indoor Cycling";
-    preferred-width: 900px;
-    preferred-height: 720px;
+    preferred-width: 1100px;
+    preferred-height: 820px;
     min-width: 640px;
     min-height: 480px;
 
@@ -547,12 +547,13 @@ export component AppWindow inherits Window {
     callback connect-device(string, int);
     callback disconnect-device(int);
     callback randomize-workout(int, int, int, int);
+    callback builder-settings-changed(int, int, int, int);
 
     private property <int> current-page: 0;
-    private property <int> draft-length-minutes: 45;
-    private property <int> draft-difficulty: 2;
-    private property <int> draft-effort-duration: 2;
-    private property <int> draft-variation: 2;
+    in-out property <int> draft-length-minutes: 45;
+    in-out property <int> draft-difficulty: 2;
+    in-out property <int> draft-effort-duration: 2;
+    in-out property <int> draft-variation: 2;
 
     background: #f7f8fa;
 
@@ -1106,7 +1107,10 @@ export component AppWindow inherits Window {
                                         maximum: 180;
                                         step: 5;
                                         value: root.draft-length-minutes;
-                                        changed(value) => { root.draft-length-minutes = round(value); }
+                                        changed(value) => {
+                                            root.draft-length-minutes = round(value);
+                                            root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation);
+                                        }
                                         min-width: 220px;
                                     }
                                     Text {
@@ -1126,11 +1130,11 @@ export component AppWindow inherits Window {
                                 Text { text: "Difficulty"; color: #334155; font-size: 15px; font-weight: 700; }
                                 HorizontalBox {
                                     spacing: 6px;
-                                    ChoiceButton { text: "Gentle"; selected: root.draft-difficulty == 0; clicked => { root.draft-difficulty = 0; } }
-                                    ChoiceButton { text: "Easy"; selected: root.draft-difficulty == 1; clicked => { root.draft-difficulty = 1; } }
-                                    ChoiceButton { text: "Moderate"; selected: root.draft-difficulty == 2; clicked => { root.draft-difficulty = 2; } }
-                                    ChoiceButton { text: "Hard"; selected: root.draft-difficulty == 3; clicked => { root.draft-difficulty = 3; } }
-                                    ChoiceButton { text: "Very hard"; selected: root.draft-difficulty == 4; clicked => { root.draft-difficulty = 4; } }
+                                    ChoiceButton { text: "Gentle"; selected: root.draft-difficulty == 0; clicked => { root.draft-difficulty = 0; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                    ChoiceButton { text: "Easy"; selected: root.draft-difficulty == 1; clicked => { root.draft-difficulty = 1; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                    ChoiceButton { text: "Moderate"; selected: root.draft-difficulty == 2; clicked => { root.draft-difficulty = 2; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                    ChoiceButton { text: "Hard"; selected: root.draft-difficulty == 3; clicked => { root.draft-difficulty = 3; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                    ChoiceButton { text: "Very hard"; selected: root.draft-difficulty == 4; clicked => { root.draft-difficulty = 4; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
                                 }
                             }
                         }
@@ -1140,11 +1144,11 @@ export component AppWindow inherits Window {
                             Text { text: "Effort duration"; color: #334155; font-size: 15px; font-weight: 700; }
                             HorizontalBox {
                                 spacing: 6px;
-                                ChoiceButton { text: "Very short"; selected: root.draft-effort-duration == 0; clicked => { root.draft-effort-duration = 0; } }
-                                ChoiceButton { text: "Short"; selected: root.draft-effort-duration == 1; clicked => { root.draft-effort-duration = 1; } }
-                                ChoiceButton { text: "Medium"; selected: root.draft-effort-duration == 2; clicked => { root.draft-effort-duration = 2; } }
-                                ChoiceButton { text: "Long"; selected: root.draft-effort-duration == 3; clicked => { root.draft-effort-duration = 3; } }
-                                ChoiceButton { text: "Very long"; selected: root.draft-effort-duration == 4; clicked => { root.draft-effort-duration = 4; } }
+                                ChoiceButton { text: "Very short"; selected: root.draft-effort-duration == 0; clicked => { root.draft-effort-duration = 0; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                ChoiceButton { text: "Short"; selected: root.draft-effort-duration == 1; clicked => { root.draft-effort-duration = 1; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                ChoiceButton { text: "Medium"; selected: root.draft-effort-duration == 2; clicked => { root.draft-effort-duration = 2; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                ChoiceButton { text: "Long"; selected: root.draft-effort-duration == 3; clicked => { root.draft-effort-duration = 3; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                ChoiceButton { text: "Very long"; selected: root.draft-effort-duration == 4; clicked => { root.draft-effort-duration = 4; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
                             }
                             Text {
                                 text: root.draft-effort-duration == 0
@@ -1164,11 +1168,11 @@ export component AppWindow inherits Window {
                             Text { text: "Variation"; color: #334155; font-size: 15px; font-weight: 700; }
                             HorizontalBox {
                                 spacing: 6px;
-                                ChoiceButton { text: "Minimal"; selected: root.draft-variation == 1; clicked => { root.draft-variation = 1; } }
-                                ChoiceButton { text: "Subtle"; selected: root.draft-variation == 2; clicked => { root.draft-variation = 2; } }
-                                ChoiceButton { text: "Varied"; selected: root.draft-variation == 3; clicked => { root.draft-variation = 3; } }
-                                ChoiceButton { text: "High"; selected: root.draft-variation == 4; clicked => { root.draft-variation = 4; } }
-                                ChoiceButton { text: "Wild"; selected: root.draft-variation == 5; clicked => { root.draft-variation = 5; } }
+                                ChoiceButton { text: "Minimal"; selected: root.draft-variation == 1; clicked => { root.draft-variation = 1; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                ChoiceButton { text: "Subtle"; selected: root.draft-variation == 2; clicked => { root.draft-variation = 2; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                ChoiceButton { text: "Varied"; selected: root.draft-variation == 3; clicked => { root.draft-variation = 3; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                ChoiceButton { text: "High"; selected: root.draft-variation == 4; clicked => { root.draft-variation = 4; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                                ChoiceButton { text: "Wild"; selected: root.draft-variation == 5; clicked => { root.draft-variation = 5; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
                             }
                         }
 

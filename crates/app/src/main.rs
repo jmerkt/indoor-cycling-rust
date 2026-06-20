@@ -10,17 +10,24 @@ use indoor_cycling_devices::{
     BluetoothDeviceService, DeviceCapabilities, DeviceId, DeviceMeasurement, DeviceRole,
     DiscoveryEvent, SimulatedTrainer, TrainerDevice,
 };
+use indoor_cycling_storage::{
+    AppConfiguration, ConfigurationStore, StoredWorkout, StoredWorkoutStep, WindowConfiguration,
+    WorkoutBuilderConfiguration,
+};
 use slint::{Model, ModelRc, SharedString, VecModel};
 
 slint::include_modules!();
 
 const DEFAULT_FTP_WATTS: u16 = 200;
+const CONFIGURATION_VERSION: u8 = 1;
 
 struct AppState {
     recorder: RideRecorder,
     workout: WorkoutEngine,
     trainer: SimulatedTrainer,
     ftp_watts: u16,
+    workout_builder: WorkoutBuilderConfiguration,
+    window: Option<WindowConfiguration>,
     smart_trainer_connected: bool,
     erg_enabled: bool,
     erg_command_pending: bool,
@@ -34,15 +41,28 @@ struct AppState {
 }
 
 impl AppState {
-    fn new() -> Self {
+    fn new(configuration: Option<&AppConfiguration>) -> Self {
         let mut trainer = SimulatedTrainer::new();
         trainer.connect().expect("simulated trainer should connect");
 
+        let ftp_watts = configuration
+            .map(|configuration| configuration.ftp_watts.clamp(50, 600))
+            .unwrap_or(DEFAULT_FTP_WATTS);
+        let workout_builder = configuration
+            .map(|configuration| configuration.workout_builder.clone())
+            .unwrap_or_else(default_workout_builder_configuration);
+        let workout = configuration
+            .map(|configuration| workout_from_stored(&configuration.latest_workout))
+            .filter(|workout| !workout.steps.is_empty())
+            .unwrap_or_else(Workout::endurance_sample);
+
         Self {
             recorder: RideRecorder::new(),
-            workout: WorkoutEngine::new(Workout::endurance_sample()),
+            workout: WorkoutEngine::new(workout),
             trainer,
-            ftp_watts: DEFAULT_FTP_WATTS,
+            ftp_watts,
+            workout_builder,
+            window: configuration.and_then(|configuration| configuration.window.clone()),
             smart_trainer_connected: false,
             erg_enabled: false,
             erg_command_pending: false,
@@ -53,6 +73,16 @@ impl AppState {
             external_heart_rate_bpm: None,
             external_cadence_rpm: None,
             running: false,
+        }
+    }
+
+    fn configuration(&self) -> AppConfiguration {
+        AppConfiguration {
+            version: CONFIGURATION_VERSION,
+            ftp_watts: self.ftp_watts,
+            workout_builder: self.workout_builder.clone(),
+            latest_workout: stored_workout(self.workout.workout()),
+            window: self.window.clone(),
         }
     }
 
@@ -68,7 +98,19 @@ impl AppState {
 
 fn main() -> Result<(), slint::PlatformError> {
     let window = AppWindow::new()?;
-    let state = Rc::new(RefCell::new(AppState::new()));
+    let configuration_store = ConfigurationStore::for_current_user().ok();
+    let saved_configuration = configuration_store
+        .as_ref()
+        .and_then(|store| match store.load() {
+            Ok(configuration) => configuration,
+            Err(error) => {
+                eprintln!("Could not load application settings: {error}");
+                None
+            }
+        });
+    let saved_configuration =
+        saved_configuration.filter(|configuration| configuration.version == CONFIGURATION_VERSION);
+    let state = Rc::new(RefCell::new(AppState::new(saved_configuration.as_ref())));
     let ride_timer = slint::Timer::default();
     let discovery_timer = slint::Timer::default();
     let discovered_devices = Rc::new(VecModel::<DeviceListItem>::default());
@@ -76,6 +118,21 @@ fn main() -> Result<(), slint::PlatformError> {
     let bluetooth_service_handle = bluetooth_service.as_ref().ok().cloned();
 
     window.set_discovered_devices(ModelRc::from(Rc::clone(&discovered_devices)));
+    if let Some(window_size) = state.borrow().window.as_ref().filter(|size| {
+        size.logical_width.is_finite()
+            && size.logical_height.is_finite()
+            && size.logical_width >= 640.
+            && size.logical_height >= 480.
+    }) {
+        window.window().set_size(slint::LogicalSize::new(
+            window_size.logical_width,
+            window_size.logical_height,
+        ));
+    }
+    window.set_draft_length_minutes(state.borrow().workout_builder.length_minutes);
+    window.set_draft_difficulty(state.borrow().workout_builder.difficulty);
+    window.set_draft_effort_duration(state.borrow().workout_builder.effort_duration);
+    window.set_draft_variation(state.borrow().workout_builder.variation);
     window.set_ride_status("Ready".into());
     render(&window, &state.borrow());
 
@@ -83,6 +140,25 @@ fn main() -> Result<(), slint::PlatformError> {
         window.set_device_scan_available(false);
         window.set_device_scan_error(true);
         window.set_device_scan_status(format!("Error: {error}").into());
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let configuration_store = configuration_store.clone();
+        window.window().on_close_requested(move || {
+            if let Some(window) = window_weak.upgrade() {
+                let window_api = window.window();
+                let size = window_api.size().to_logical(window_api.scale_factor());
+                let mut state = state.borrow_mut();
+                state.window = Some(WindowConfiguration {
+                    logical_width: size.width,
+                    logical_height: size.height,
+                });
+                persist_configuration(configuration_store.as_ref(), &state);
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
     }
 
     {
@@ -105,14 +181,33 @@ fn main() -> Result<(), slint::PlatformError> {
     }
 
     {
+        let state = Rc::clone(&state);
+        let configuration_store = configuration_store.clone();
+        window.on_builder_settings_changed(
+            move |length_minutes, difficulty, effort_duration, variation| {
+                let mut state = state.borrow_mut();
+                state.workout_builder = WorkoutBuilderConfiguration {
+                    length_minutes: length_minutes.clamp(15, 180),
+                    difficulty: difficulty.clamp(0, 4),
+                    effort_duration: effort_duration.clamp(0, 4),
+                    variation: variation.clamp(1, 5),
+                };
+                persist_configuration(configuration_store.as_ref(), &state);
+            },
+        );
+    }
+
+    {
         let window_weak = window.as_weak();
         let state = Rc::clone(&state);
         let bluetooth_service = bluetooth_service_handle.clone();
+        let configuration_store = configuration_store.clone();
         window.on_set_ftp(move |ftp_watts| {
             let mut state = state.borrow_mut();
             state.ftp_watts = u16::try_from(ftp_watts.clamp(50, 600)).unwrap_or(DEFAULT_FTP_WATTS);
             apply_current_target(&mut state);
             sync_erg_target(&mut state, bluetooth_service.as_deref());
+            persist_configuration(configuration_store.as_ref(), &state);
             if let Some(window) = window_weak.upgrade() {
                 render(&window, &state);
             }
@@ -123,6 +218,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let window_weak = window.as_weak();
         let state = Rc::clone(&state);
         let bluetooth_service = bluetooth_service_handle.clone();
+        let configuration_store = configuration_store.clone();
         window.on_randomize_workout(
             move |length_minutes, difficulty, effort_duration, variation| {
                 let parameters = WorkoutParameters {
@@ -146,9 +242,16 @@ fn main() -> Result<(), slint::PlatformError> {
                 let mut state = state.borrow_mut();
                 state.running = false;
                 state.recorder = RideRecorder::new();
+                state.workout_builder = WorkoutBuilderConfiguration {
+                    length_minutes,
+                    difficulty,
+                    effort_duration,
+                    variation,
+                };
                 state.workout = WorkoutEngine::new(Workout::randomized(parameters));
                 apply_current_target(&mut state);
                 sync_erg_target(&mut state, bluetooth_service.as_deref());
+                persist_configuration(configuration_store.as_ref(), &state);
                 if let Some(window) = window_weak.upgrade() {
                     window.set_ride_status("Ready".into());
                     render(&window, &state);
@@ -966,4 +1069,55 @@ fn format_duration(total_secs: u64) -> String {
     let minutes = total_secs / 60;
     let seconds = total_secs % 60;
     format!("{minutes:02}:{seconds:02}")
+}
+
+fn default_workout_builder_configuration() -> WorkoutBuilderConfiguration {
+    WorkoutBuilderConfiguration {
+        length_minutes: 45,
+        difficulty: 2,
+        effort_duration: 2,
+        variation: 2,
+    }
+}
+
+fn workout_from_stored(workout: &StoredWorkout) -> Workout {
+    Workout::new(
+        workout.name.clone(),
+        workout
+            .steps
+            .iter()
+            .map(|step| {
+                indoor_cycling_core::WorkoutStep::new(
+                    step.name.clone(),
+                    step.duration_secs,
+                    step.target_ftp_percent,
+                )
+            })
+            .collect(),
+    )
+}
+
+fn stored_workout(workout: &Workout) -> StoredWorkout {
+    StoredWorkout {
+        name: workout.name.clone(),
+        steps: workout
+            .steps
+            .iter()
+            .map(|step| StoredWorkoutStep {
+                name: step.name.clone(),
+                duration_secs: step.duration_secs,
+                target_ftp_percent: step.target_ftp_percent,
+            })
+            .collect(),
+    }
+}
+
+fn persist_configuration(store: Option<&ConfigurationStore>, state: &AppState) {
+    let Some(store) = store else {
+        return;
+    };
+
+    if let Err(error) = store.save(&state.configuration()) {
+        eprintln!("Could not save application settings: {error}");
+    }
 }

@@ -2441,6 +2441,8 @@ name = "indoor-cycling-storage"
 version = "0.1.0"
 dependencies = [
  "indoor-cycling-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
