@@ -3,6 +3,8 @@ use crate::DeviceError;
 pub const REQUEST_CONTROL_OPCODE: u8 = 0x00;
 pub const RESET_OPCODE: u8 = 0x01;
 pub const SET_TARGET_POWER_OPCODE: u8 = 0x05;
+pub const STOP_OR_PAUSE_OPCODE: u8 = 0x08;
+pub const STOP_CONTROL_INFORMATION: u8 = 0x01;
 const RESPONSE_CODE_OPCODE: u8 = 0x80;
 const SUCCESS_RESULT_CODE: u8 = 0x01;
 
@@ -60,6 +62,10 @@ pub fn reset_command() -> [u8; 1] {
 pub fn set_target_power_command(watts: u16) -> [u8; 3] {
     let watts = i16::try_from(watts).unwrap_or(i16::MAX).to_le_bytes();
     [SET_TARGET_POWER_OPCODE, watts[0], watts[1]]
+}
+
+pub fn stop_command() -> [u8; 2] {
+    [STOP_OR_PAUSE_OPCODE, STOP_CONTROL_INFORMATION]
 }
 
 pub fn parse_control_point_response(value: &[u8], expected_opcode: u8) -> Result<(), DeviceError> {
@@ -143,6 +149,11 @@ mod tests {
     #[test]
     fn builds_target_power_command() {
         assert_eq!(set_target_power_command(250), [0x05, 0xfa, 0x00]);
+    }
+
+    #[test]
+    fn builds_stop_command() {
+        assert_eq!(stop_command(), [0x08, 0x01]);
     }
 
     #[test]
