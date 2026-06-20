@@ -146,6 +146,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let window_weak = window.as_weak();
         let state = Rc::clone(&state);
         let configuration_store = configuration_store.clone();
+        let bluetooth_service = bluetooth_service_handle.clone();
         window.window().on_close_requested(move || {
             if let Some(window) = window_weak.upgrade() {
                 let window_api = window.window();
@@ -156,6 +157,9 @@ fn main() -> Result<(), slint::PlatformError> {
                     logical_height: size.height,
                 });
                 persist_configuration(configuration_store.as_ref(), &state);
+            }
+            if let Some(bluetooth_service) = &bluetooth_service {
+                bluetooth_service.shutdown();
             }
             slint::CloseRequestResponse::HideWindow
         });

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -15,7 +16,7 @@ use crate::{
 pub struct BluetoothDeviceService {
     commands: UnboundedSender<DiscoveryCommand>,
     events: Receiver<DiscoveryEvent>,
-    worker: Option<JoinHandle<()>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl BluetoothDeviceService {
@@ -30,7 +31,7 @@ impl BluetoothDeviceService {
         Ok(Self {
             commands: command_sender,
             events: event_receiver,
-            worker: Some(worker),
+            worker: Mutex::new(Some(worker)),
         })
     }
 
@@ -65,6 +66,21 @@ impl BluetoothDeviceService {
         self.events.recv().map_err(|_| DeviceError::ServiceStopped)
     }
 
+    /// Disconnects every Bluetooth role and waits for the service worker to
+    /// finish. Call this before application shutdown so the adapter and trainer
+    /// do not retain a stale connection.
+    pub fn shutdown(&self) {
+        let Ok(mut worker) = self.worker.lock() else {
+            return;
+        };
+        let Some(worker) = worker.take() else {
+            return;
+        };
+
+        let _ = self.commands.send(DiscoveryCommand::Shutdown);
+        let _ = worker.join();
+    }
+
     fn send(&self, command: DiscoveryCommand) -> Result<(), DeviceError> {
         self.commands
             .send(command)
@@ -74,10 +90,7 @@ impl BluetoothDeviceService {
 
 impl Drop for BluetoothDeviceService {
     fn drop(&mut self) {
-        let _ = self.commands.send(DiscoveryCommand::Shutdown);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        self.shutdown();
     }
 }
 
