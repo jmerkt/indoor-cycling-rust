@@ -1008,12 +1008,6 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
     match phase {
         WorkoutPhase::NotStarted => {
             let first_step = workout.steps.first();
-            window.set_current_step(
-                first_step
-                    .map(|step| step.name.as_str())
-                    .unwrap_or("No workout stages")
-                    .into(),
-            );
             window.set_target_power_watts(
                 first_step
                     .map(|step| i32::from(step.target_power_watts(state.ftp_watts)))
@@ -1042,7 +1036,6 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
         } => {
             let remaining_secs = step.duration_secs.saturating_sub(*step_elapsed_secs);
             let target_watts = step.target_power_watts(state.ftp_watts);
-            window.set_current_step(step.name.clone().into());
             window.set_target_power_watts(i32::from(target_watts));
             window.set_workout_status(
                 format!(
@@ -1060,7 +1053,6 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
             window.set_can_skip_stage(true);
         }
         WorkoutPhase::Finished => {
-            window.set_current_step("Workout complete".into());
             window.set_target_power_watts(0);
             window.set_workout_status("Workout complete".into());
             window.set_can_go_previous_stage(!workout.steps.is_empty());

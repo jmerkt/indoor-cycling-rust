@@ -100,83 +100,54 @@ component ChoiceButton inherits Rectangle {
     touch := TouchArea { clicked => { root.clicked(); } }
 }
 
-component FtpStepButton inherits Rectangle {
-    in property <string> text;
-    in property <bool> enabled: true;
-    callback clicked();
-
-    min-width: 38px;
-    max-width: 38px;
-    min-height: 38px;
-    max-height: 38px;
-    opacity: root.enabled ? 1 : 0.4;
-    background: touch.pressed && root.enabled
-        ? #0d5f59
-        : touch.has-hover && root.enabled ? #0f766e : #e6f4f2;
-    border-color: #9ccbc6;
-    border-width: 1px;
-    border-radius: 6px;
-
-    Text {
-        text: root.text;
-        color: touch.has-hover && root.enabled ? white : #0f766e;
-        font-size: 22px;
-        font-weight: 700;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-
-    touch := TouchArea {
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-    }
-}
-
 component FtpControl inherits Rectangle {
     in property <int> value;
     callback changed(int);
 
-    min-width: 250px;
-    max-width: 250px;
-    min-height: 74px;
-    max-height: 74px;
+    min-width: 160px;
+    max-width: 160px;
+    min-height: 116px;
+    max-height: 116px;
     background: white;
     border-color: #cbd5df;
     border-width: 1px;
     border-radius: 8px;
 
-    HorizontalBox {
-        padding: 12px;
-        spacing: 10px;
+    VerticalBox {
+        padding: 14px;
+        spacing: 4px;
 
-        VerticalBox {
-            spacing: 1px;
+        Text {
+            text: "FTP";
+            color: #53616f;
+            font-size: 15px;
+            font-weight: 600;
+        }
 
-            Text {
-                text: "FTP";
-                color: #53616f;
-                font-size: 12px;
-                font-weight: 600;
-            }
+        HorizontalBox {
+            spacing: 4px;
 
-            Text {
-                text: root.value + " W";
-                color: #17202a;
-                font-size: 24px;
+            TextInput {
+                text: root.value + "";
+                font-size: 26px;
                 font-weight: 800;
+                color: #17202a;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                accepted => {
+                    if self.text.is-float() {
+                        root.changed(max(50., min(600., self.text.to-float())));
+                    }
+                }
             }
-        }
 
-        FtpStepButton {
-            text: "-";
-            enabled: root.value > 50;
-            clicked => { root.changed(max(50, root.value - 5)); }
-        }
-
-        FtpStepButton {
-            text: "+";
-            enabled: root.value < 600;
-            clicked => { root.changed(min(600, root.value + 5)); }
+            Text {
+                text: "W";
+                color: #53616f;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
         }
     }
 }
@@ -189,10 +160,10 @@ component ErgControl inherits Rectangle {
     in property <string> status;
     callback toggled();
 
-    min-width: 250px;
-    max-width: 250px;
-    min-height: 74px;
-    max-height: 74px;
+    min-width: 180px;
+    max-width: 180px;
+    min-height: 116px;
+    max-height: 116px;
     background: root.enabled ? #ecfdf5 : white;
     border-color: root.enabled ? #0f766e : #cbd5df;
     border-width: root.enabled ? 2px : 1px;
@@ -221,20 +192,20 @@ component ErgControl inherits Rectangle {
         }
 
         Rectangle {
-            min-width: 72px;
-            max-width: 72px;
-            min-height: 38px;
-            max-height: 38px;
+            min-width: 54px;
+            max-width: 54px;
+            min-height: 34px;
+            max-height: 34px;
             opacity: root.available && !root.pending ? 1 : 0.45;
             background: root.enabled ? #0f766e : #e6ebf0;
             border-color: root.enabled ? #0f766e : #aeb8c2;
             border-width: 1px;
-            border-radius: 19px;
+            border-radius: 17px;
 
             Text {
                 text: root.pending ? "..." : root.enabled ? "ON" : "OFF";
                 color: root.enabled ? white : #53616f;
-                font-size: 13px;
+                font-size: 12px;
                 font-weight: 700;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -248,6 +219,67 @@ component ErgControl inherits Rectangle {
     }
 }
 
+component DashboardStat inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+
+    min-width: 120px;
+    max-width: 120px;
+    min-height: 116px;
+    max-height: 116px;
+    background: white;
+    border-color: #cbd5df;
+    border-width: 1px;
+    border-radius: 8px;
+
+    VerticalBox {
+        padding: 12px;
+        spacing: 2px;
+
+        Text {
+            text: root.label;
+            color: #53616f;
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        Text {
+            text: root.value;
+            color: #17202a;
+            font-size: 30px;
+            font-weight: 800;
+            overflow: elide;
+        }
+    }
+}
+
+component RideStatusLed inherits Rectangle {
+    in property <string> status;
+
+    min-width: 14px;
+    max-width: 14px;
+    background: transparent;
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        background: root.status == "Riding" ? #16a34a : root.status == "Paused" ? #eab308 : #dc2626;
+        border-color: root.status == "Riding" ? #15803d : root.status == "Paused" ? #ca8a04 : #b91c1c;
+        border-width: 1px;
+        border-radius: 7px;
+    }
+}
+
+component DashboardDivider inherits Rectangle {
+    min-width: 1px;
+    max-width: 1px;
+    min-height: 72px;
+    max-height: 72px;
+    background: #d8dde3;
+}
+
 component MetricTile inherits Rectangle {
     in property <string> label;
     in property <int> value;
@@ -258,57 +290,69 @@ component MetricTile inherits Rectangle {
     border-color: #d8dde3;
     border-width: 1px;
     border-radius: 8px;
+    min-width: 130px;
+    max-width: 130px;
+    min-height: 116px;
+    max-height: 116px;
 
     VerticalBox {
-        padding: 18px;
-        spacing: 10px;
+        padding: 14px;
+        spacing: 2px;
 
         Text {
             text: root.label;
             color: #53616f;
-            font-size: 14px;
+            font-size: 15px;
+            horizontal-alignment: center;
         }
 
         Text {
             text: root.value;
             color: root.accent;
-            font-size: 46px;
+            font-size: 34px;
             font-weight: 800;
             horizontal-alignment: center;
         }
 
-        Text {
-            text: root.suffix;
-            color: #53616f;
-            font-size: 15px;
-            horizontal-alignment: center;
-        }
+        Text { text: root.suffix; color: #53616f; font-size: 14px; horizontal-alignment: center; }
     }
 }
 
 component PowerMetricTile inherits Rectangle {
     in property <int> primary-value;
     in property <int> secondary-value;
+    in property <int> target-value;
+
+    private property <int> target-margin: max(10, root.target-value / 20);
+    private property <bool> has-target: root.target-value > 0;
+    private property <bool> on-target: root.has-target
+        && root.primary-value >= root.target-value - root.target-margin
+        && root.primary-value <= root.target-value + root.target-margin;
 
     background: #fbfcfd;
-    border-color: #d8dde3;
-    border-width: 1px;
+    border-color: !root.has-target ? #d8dde3 : root.on-target ? #16a34a : #dc2626;
+    border-width: root.has-target ? 3px : 1px;
     border-radius: 8px;
+    min-width: 130px;
+    max-width: 130px;
+    min-height: 116px;
+    max-height: 116px;
 
     VerticalBox {
-        padding: 18px;
-        spacing: 8px;
+        padding: 10px;
+        spacing: 1px;
 
         Text {
             text: "Power";
             color: #53616f;
-            font-size: 14px;
+            font-size: 15px;
+            horizontal-alignment: center;
         }
 
         Text {
             text: root.primary-value;
             color: #0f766e;
-            font-size: 46px;
+            font-size: 34px;
             font-weight: 800;
             horizontal-alignment: center;
         }
@@ -316,7 +360,7 @@ component PowerMetricTile inherits Rectangle {
         Text {
             text: "W";
             color: #53616f;
-            font-size: 15px;
+            font-size: 14px;
             horizontal-alignment: center;
         }
 
@@ -325,7 +369,7 @@ component PowerMetricTile inherits Rectangle {
                 ? "Secondary  " + root.secondary-value + " W"
                 : "Secondary  -- W";
             color: #7c3aed;
-            font-size: 14px;
+            font-size: 11px;
             font-weight: 600;
             horizontal-alignment: center;
         }
@@ -424,21 +468,19 @@ component WorkoutStageBlock inherits Rectangle {
 
 component RoleStatus inherits Rectangle {
     in property <string> label;
-    in property <string> status;
     in property <string> value;
-    in property <bool> error;
     in property <bool> connected;
     callback disconnect();
 
     background: white;
-    border-color: root.error ? #be123c : #d8dde3;
-    border-width: 1px;
+    border-color: root.connected ? #16a34a : #dc2626;
+    border-width: 2px;
     border-radius: 8px;
-    min-height: 68px;
+    min-height: 92px;
 
     HorizontalBox {
         padding: 14px;
-        spacing: 16px;
+        spacing: 12px;
 
         VerticalBox {
             spacing: 4px;
@@ -450,8 +492,8 @@ component RoleStatus inherits Rectangle {
             }
 
             Text {
-                text: root.status;
-                color: root.error ? #be123c : #17202a;
+                text: root.connected ? "Connected" : "Not connected";
+                color: root.connected ? #15803d : #b91c1c;
                 font-size: 15px;
                 font-weight: 600;
             }
@@ -464,12 +506,12 @@ component RoleStatus inherits Rectangle {
             font-weight: 700;
             horizontal-alignment: right;
             vertical-alignment: center;
-            min-width: 110px;
+            min-width: 76px;
         }
 
         if root.connected : ActionButton {
             text: "Disconnect";
-            max-width: 110px;
+            max-width: 96px;
             clicked => { root.disconnect(); }
         }
     }
@@ -484,7 +526,6 @@ export component AppWindow inherits Window {
 
     in property <string> workout-name;
     in property <string> ride-status;
-    in property <string> current-step: "No active step";
     in property <string> elapsed-text: "00:00";
     in property <int> power-watts: 0;
     in property <int> secondary-power-watts: 0;
@@ -613,36 +654,98 @@ export component AppWindow inherits Window {
                 padding: 24px;
                 spacing: 18px;
 
-                HorizontalBox {
-                    spacing: 18px;
+                dashboard-header := HorizontalBox {
+                    min-width: 1244px;
+                    min-height: 116px;
+                    max-height: 116px;
+                    spacing: 0px;
+                    horizontal-stretch: 1;
 
-                    VerticalBox {
-                        spacing: 4px;
-                        Text {
-                            text: root.workout-name;
-                            color: #17202a;
-                            font-size: 30px;
-                            font-weight: 700;
+                    HorizontalBox {
+                        min-width: 352px;
+                        max-width: 352px;
+                        spacing: 8px;
+
+                        RideStatusLed {
+                            status: root.ride-status;
                         }
-                        Text {
-                            text: root.ride-status;
-                            color: #53616f;
-                            font-size: 16px;
+
+                        DashboardStat {
+                            label: "Elapsed";
+                            value: root.elapsed-text;
+                        }
+
+                        DashboardStat {
+                            label: "Avg Power";
+                            value: root.average-power-text;
                         }
                     }
 
-                    FtpControl {
-                        value: root.ftp-watts;
-                        changed(value) => { root.set-ftp(value); }
+                    DashboardDivider { }
+
+                    Rectangle {
+                        background: #f7f8fa;
+                        horizontal-stretch: 1;
                     }
 
-                    ErgControl {
-                        enabled: root.erg-enabled;
-                        available: root.erg-available;
-                        pending: root.erg-pending;
-                        error: root.erg-error;
-                        status: root.erg-status;
-                        toggled => { root.toggle-erg-mode(); }
+                    HorizontalBox {
+                        min-width: 538px;
+                        max-width: 538px;
+                        spacing: 6px;
+
+                        PowerMetricTile {
+                            primary-value: root.power-watts;
+                            secondary-value: root.secondary-power-watts;
+                            target-value: root.target-power-watts;
+                        }
+
+                        MetricTile {
+                            label: "Target";
+                            value: root.target-power-watts;
+                            suffix: "W";
+                            accent: #b45309;
+                        }
+
+                        MetricTile {
+                            label: "Cadence";
+                            value: root.cadence-rpm;
+                            suffix: "rpm";
+                            accent: #2563eb;
+                        }
+
+                        MetricTile {
+                            label: "Heart Rate";
+                            value: root.heart-rate-bpm;
+                            suffix: "bpm";
+                            accent: #be123c;
+                        }
+                    }
+
+                    Rectangle {
+                        background: #f7f8fa;
+                        horizontal-stretch: 1;
+                    }
+
+                    DashboardDivider { }
+
+                    HorizontalBox {
+                        min-width: 352px;
+                        max-width: 352px;
+                        spacing: 12px;
+
+                        FtpControl {
+                            value: root.ftp-watts;
+                            changed(value) => { root.set-ftp(value); }
+                        }
+
+                        ErgControl {
+                            enabled: root.erg-enabled;
+                            available: root.erg-available;
+                            pending: root.erg-pending;
+                            error: root.erg-error;
+                            status: root.erg-status;
+                            toggled => { root.toggle-erg-mode(); }
+                        }
                     }
                 }
 
@@ -651,8 +754,8 @@ export component AppWindow inherits Window {
                     border-color: #d8dde3;
                     border-width: 1px;
                     border-radius: 8px;
-                    min-height: 192px;
-                    vertical-stretch: 1;
+                    min-height: 280px;
+                    max-height: 280px;
 
                     VerticalBox {
                         padding: 16px;
@@ -693,122 +796,6 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                Rectangle {
-                    background: white;
-                    border-color: #d8dde3;
-                    border-width: 1px;
-                    border-radius: 8px;
-                    min-height: 250px;
-                    vertical-stretch: 2;
-
-                    HorizontalBox {
-                        padding: 24px;
-                        spacing: 24px;
-
-                        PowerMetricTile {
-                            primary-value: root.power-watts;
-                            secondary-value: root.secondary-power-watts;
-                        }
-
-                        MetricTile {
-                            label: "Target";
-                            value: root.target-power-watts;
-                            suffix: "W";
-                            accent: #b45309;
-                        }
-
-                        MetricTile {
-                            label: "Cadence";
-                            value: root.cadence-rpm;
-                            suffix: "rpm";
-                            accent: #2563eb;
-                        }
-
-                        MetricTile {
-                            label: "Heart Rate";
-                            value: root.heart-rate-bpm;
-                            suffix: "bpm";
-                            accent: #be123c;
-                        }
-                    }
-                }
-
-                HorizontalBox {
-                    spacing: 18px;
-                    vertical-stretch: 1;
-
-                    Rectangle {
-                        background: white;
-                        border-color: #d8dde3;
-                        border-width: 1px;
-                        border-radius: 8px;
-
-                        VerticalBox {
-                            padding: 18px;
-                            spacing: 6px;
-
-                            Text {
-                                text: "Elapsed";
-                                color: #53616f;
-                                font-size: 14px;
-                            }
-                            Text {
-                                text: root.elapsed-text;
-                                color: #17202a;
-                                font-size: 34px;
-                                font-weight: 700;
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        background: white;
-                        border-color: #d8dde3;
-                        border-width: 1px;
-                        border-radius: 8px;
-
-                        VerticalBox {
-                            padding: 18px;
-                            spacing: 6px;
-
-                            Text {
-                                text: "Current Step";
-                                color: #53616f;
-                                font-size: 14px;
-                            }
-                            Text {
-                                text: root.current-step;
-                                color: #17202a;
-                                font-size: 24px;
-                                font-weight: 700;
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        background: white;
-                        border-color: #d8dde3;
-                        border-width: 1px;
-                        border-radius: 8px;
-
-                        VerticalBox {
-                            padding: 18px;
-                            spacing: 6px;
-
-                            Text {
-                                text: "Average Power";
-                                color: #53616f;
-                                font-size: 14px;
-                            }
-                            Text {
-                                text: root.average-power-text;
-                                color: #17202a;
-                                font-size: 24px;
-                                font-weight: 700;
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -862,51 +849,49 @@ export component AppWindow inherits Window {
                     font-weight: 700;
                 }
 
-                RoleStatus {
-                    label: "Primary Power";
-                    status: root.power-connection-status;
-                    value: root.live-power-watts > 0 ? root.live-power-watts + " W" : "-- W";
-                    error: root.power-connection-error;
-                    connected: root.connected-power-id != "";
-                    disconnect => { root.disconnect-device(0); }
+                HorizontalBox {
+                    spacing: 18px;
+
+                    RoleStatus {
+                        label: "Primary Power";
+                        value: root.live-power-watts > 0 ? root.live-power-watts + " W" : "-- W";
+                        connected: root.connected-power-id != "";
+                        disconnect => { root.disconnect-device(0); }
+                    }
+
+                    RoleStatus {
+                        label: "Smart Trainer";
+                        value: root.connected-smart-trainer-id != "" ? "Ready" : "--";
+                        connected: root.connected-smart-trainer-id != "";
+                        disconnect => { root.disconnect-device(4); }
+                    }
+
+                    RoleStatus {
+                        label: "Secondary Power";
+                        value: root.live-secondary-power-watts > 0
+                            ? root.live-secondary-power-watts + " W"
+                            : "-- W";
+                        connected: root.connected-secondary-power-id != "";
+                        disconnect => { root.disconnect-device(1); }
+                    }
                 }
 
-                RoleStatus {
-                    label: "Secondary Power";
-                    status: root.secondary-power-connection-status;
-                    value: root.live-secondary-power-watts > 0
-                        ? root.live-secondary-power-watts + " W"
-                        : "-- W";
-                    error: root.secondary-power-connection-error;
-                    connected: root.connected-secondary-power-id != "";
-                    disconnect => { root.disconnect-device(1); }
-                }
+                HorizontalBox {
+                    spacing: 18px;
 
-                RoleStatus {
-                    label: "Heart Rate";
-                    status: root.heart-rate-connection-status;
-                    value: root.live-heart-rate-bpm > 0 ? root.live-heart-rate-bpm + " bpm" : "-- bpm";
-                    error: root.heart-rate-connection-error;
-                    connected: root.connected-heart-rate-id != "";
-                    disconnect => { root.disconnect-device(2); }
-                }
+                    RoleStatus {
+                        label: "Heart Rate";
+                        value: root.live-heart-rate-bpm > 0 ? root.live-heart-rate-bpm + " bpm" : "-- bpm";
+                        connected: root.connected-heart-rate-id != "";
+                        disconnect => { root.disconnect-device(2); }
+                    }
 
-                RoleStatus {
-                    label: "RPM";
-                    status: root.cadence-connection-status;
-                    value: root.live-cadence-rpm > 0 ? root.live-cadence-rpm + " rpm" : "-- rpm";
-                    error: root.cadence-connection-error;
-                    connected: root.connected-cadence-id != "";
-                    disconnect => { root.disconnect-device(3); }
-                }
-
-                RoleStatus {
-                    label: "Smart Trainer";
-                    status: root.smart-trainer-connection-status;
-                    value: root.connected-smart-trainer-id != "" ? "Connected" : "--";
-                    error: root.smart-trainer-connection-error;
-                    connected: root.connected-smart-trainer-id != "";
-                    disconnect => { root.disconnect-device(4); }
+                    RoleStatus {
+                        label: "RPM";
+                        value: root.live-cadence-rpm > 0 ? root.live-cadence-rpm + " rpm" : "-- rpm";
+                        connected: root.connected-cadence-id != "";
+                        disconnect => { root.disconnect-device(3); }
+                    }
                 }
 
                 if root.discovered-devices.length == 0 : Rectangle {
