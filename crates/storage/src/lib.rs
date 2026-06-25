@@ -238,23 +238,55 @@ mod fit {
     const EVENT_TIMER: u8 = 0;
     const EVENT_TYPE_STOP: u8 = 1;
     const ACTIVITY_MANUAL: u8 = 0;
-    const LAP_SESSION_FIELDS: [Field; 15] = [
+    const SESSION_FIELDS: [Field; 20] = [
         Field::new(253, 4, TYPE_UINT32),
+        Field::new(0, 1, TYPE_ENUM),
+        Field::new(1, 1, TYPE_ENUM),
+        Field::new(2, 4, TYPE_UINT32),
+        Field::new(5, 1, TYPE_ENUM),
+        Field::new(6, 1, TYPE_ENUM),
+        Field::new(7, 4, TYPE_UINT32),
+        Field::new(8, 4, TYPE_UINT32),
+        Field::new(9, 4, TYPE_UINT32),
+        Field::new(16, 1, TYPE_UINT8),
+        Field::new(17, 1, TYPE_UINT8),
+        Field::new(18, 1, TYPE_UINT8),
+        Field::new(19, 1, TYPE_UINT8),
+        Field::new(20, 2, TYPE_UINT16),
+        Field::new(21, 2, TYPE_UINT16),
+        Field::new(22, 2, TYPE_UINT16),
+        Field::new(23, 2, TYPE_UINT16),
+        Field::new(25, 2, TYPE_UINT16),
+        Field::new(26, 2, TYPE_UINT16),
+        Field::new(48, 4, TYPE_UINT32),
+    ];
+    const LAP_FIELDS: [Field; 19] = [
+        Field::new(253, 4, TYPE_UINT32),
+        Field::new(0, 1, TYPE_ENUM),
+        Field::new(1, 1, TYPE_ENUM),
         Field::new(2, 4, TYPE_UINT32),
         Field::new(7, 4, TYPE_UINT32),
         Field::new(8, 4, TYPE_UINT32),
-        Field::new(48, 4, TYPE_UINT32),
-        Field::new(20, 2, TYPE_UINT16),
-        Field::new(21, 2, TYPE_UINT16),
-        Field::new(22, 1, TYPE_UINT8),
-        Field::new(23, 1, TYPE_UINT8),
+        Field::new(9, 4, TYPE_UINT32),
+        Field::new(15, 1, TYPE_UINT8),
         Field::new(16, 1, TYPE_UINT8),
         Field::new(17, 1, TYPE_UINT8),
-        Field::new(5, 1, TYPE_ENUM),
-        Field::new(6, 1, TYPE_ENUM),
-        Field::new(0, 1, TYPE_ENUM),
-        Field::new(1, 1, TYPE_ENUM),
+        Field::new(18, 1, TYPE_UINT8),
+        Field::new(19, 2, TYPE_UINT16),
+        Field::new(20, 2, TYPE_UINT16),
+        Field::new(21, 2, TYPE_UINT16),
+        Field::new(22, 2, TYPE_UINT16),
+        Field::new(23, 1, TYPE_ENUM),
+        Field::new(25, 1, TYPE_ENUM),
+        Field::new(39, 1, TYPE_ENUM),
+        Field::new(41, 4, TYPE_UINT32),
     ];
+    const ZERO_DISTANCE: u32 = 0;
+    const ZERO_ASCENT_METERS: u16 = 0;
+    const ZERO_DESCENT_METERS: u16 = 0;
+    const ZERO_INTENSITY: u8 = 0;
+    const FIRST_LAP_INDEX: u16 = 0;
+    const SINGLE_LAP: u16 = 1;
 
     pub fn activity_file(samples: &[RideSample], finish_time: SystemTime) -> io::Result<Vec<u8>> {
         if samples.is_empty() {
@@ -310,10 +342,10 @@ mod fit {
             .max()
             .unwrap_or(0xFF);
         let summary = RideSummary::new(stats, total_timer_time, total_work, max_heart_rate_bpm);
-        data.define(2, MSG_LAP, lap_session_fields());
+        data.define(2, MSG_LAP, &LAP_FIELDS);
         data.lap(start_timestamp, finish_timestamp, &summary);
 
-        data.define(3, MSG_SESSION, lap_session_fields());
+        data.define(3, MSG_SESSION, &SESSION_FIELDS);
         data.session(start_timestamp, finish_timestamp, &summary);
 
         data.define(
@@ -331,10 +363,6 @@ mod fit {
         data.activity(finish_timestamp, total_timer_time);
 
         Ok(with_fit_header(data.into_bytes()))
-    }
-
-    fn lap_session_fields() -> &'static [Field] {
-        &LAP_SESSION_FIELDS
     }
 
     #[derive(Clone, Copy)]
@@ -433,36 +461,50 @@ mod fit {
         }
 
         fn lap(&mut self, start_time: u32, timestamp: u32, summary: &RideSummary) {
-            self.lap_session(2, start_time, timestamp, summary);
-        }
-
-        fn session(&mut self, start_time: u32, timestamp: u32, summary: &RideSummary) {
-            self.lap_session(3, start_time, timestamp, summary);
-        }
-
-        fn lap_session(
-            &mut self,
-            local_message: u8,
-            start_time: u32,
-            timestamp: u32,
-            summary: &RideSummary,
-        ) {
-            self.bytes.push(local_message);
+            self.bytes.push(2);
             self.write_u32(timestamp);
+            self.bytes.push(EVENT_TIMER);
+            self.bytes.push(EVENT_TYPE_STOP);
             self.write_u32(start_time);
             self.write_u32(summary.total_timer_time);
             self.write_u32(summary.total_timer_time);
-            self.write_u32(summary.total_work);
-            self.write_u16(summary.average_power_watts);
-            self.write_u16(summary.max_power_watts);
-            self.bytes.push(summary.average_cadence_rpm);
-            self.bytes.push(summary.max_cadence_rpm);
+            self.write_u32(ZERO_DISTANCE);
             self.bytes.push(summary.average_heart_rate_bpm);
             self.bytes.push(summary.max_heart_rate_bpm);
+            self.bytes.push(summary.average_cadence_rpm);
+            self.bytes.push(summary.max_cadence_rpm);
+            self.write_u16(summary.average_power_watts);
+            self.write_u16(summary.max_power_watts);
+            self.write_u16(ZERO_ASCENT_METERS);
+            self.write_u16(ZERO_DESCENT_METERS);
+            self.bytes.push(ZERO_INTENSITY);
             self.bytes.push(SPORT_CYCLING);
             self.bytes.push(SUB_SPORT_INDOOR_CYCLING);
+            self.write_u32(summary.total_work);
+        }
+
+        fn session(&mut self, start_time: u32, timestamp: u32, summary: &RideSummary) {
+            self.bytes.push(3);
+            self.write_u32(timestamp);
             self.bytes.push(EVENT_TIMER);
             self.bytes.push(EVENT_TYPE_STOP);
+            self.write_u32(start_time);
+            self.bytes.push(SPORT_CYCLING);
+            self.bytes.push(SUB_SPORT_INDOOR_CYCLING);
+            self.write_u32(summary.total_timer_time);
+            self.write_u32(summary.total_timer_time);
+            self.write_u32(ZERO_DISTANCE);
+            self.bytes.push(summary.average_heart_rate_bpm);
+            self.bytes.push(summary.max_heart_rate_bpm);
+            self.bytes.push(summary.average_cadence_rpm);
+            self.bytes.push(summary.max_cadence_rpm);
+            self.write_u16(summary.average_power_watts);
+            self.write_u16(summary.max_power_watts);
+            self.write_u16(ZERO_ASCENT_METERS);
+            self.write_u16(ZERO_DESCENT_METERS);
+            self.write_u16(FIRST_LAP_INDEX);
+            self.write_u16(SINGLE_LAP);
+            self.write_u32(summary.total_work);
         }
 
         fn activity(&mut self, timestamp: u32, total_timer_time: u32) {
@@ -583,6 +625,16 @@ mod fit {
                 MSG_FILE_ID
             );
             assert_eq!(file[19], 5);
+            let definitions = definitions(&file);
+            assert_eq!(
+                definitions.get(&MSG_LAP).unwrap(),
+                &vec![253, 0, 1, 2, 7, 8, 9, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 39, 41]
+            );
+            assert_eq!(
+                definitions.get(&MSG_SESSION).unwrap(),
+                &vec![253, 0, 1, 2, 5, 6, 7, 8, 9, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 48]
+            );
+            assert!(!definitions.get(&MSG_LAP).unwrap().contains(&48));
             assert!(
                 file[14..14 + data_size]
                     .iter()
@@ -600,6 +652,44 @@ mod fit {
                 activity_file(&[], UNIX_EPOCH + Duration::from_secs(1_700_000_000)).unwrap_err();
 
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+
+        fn definitions(file: &[u8]) -> std::collections::HashMap<u16, Vec<u8>> {
+            let data_size = u32::from_le_bytes(file[4..8].try_into().unwrap()) as usize;
+            let data = &file[14..14 + data_size];
+            let mut offset = 0;
+            let mut local_sizes = [0usize; 16];
+            let mut definitions = std::collections::HashMap::new();
+
+            while offset < data.len() {
+                let header = data[offset];
+                offset += 1;
+                let local_message = usize::from(header & 0x0F);
+                if header & 0x40 != 0 {
+                    offset += 1;
+                    let architecture = data[offset];
+                    offset += 1;
+                    assert_eq!(architecture, 0);
+                    let global_message =
+                        u16::from_le_bytes(data[offset..offset + 2].try_into().unwrap());
+                    offset += 2;
+                    let field_count = usize::from(data[offset]);
+                    offset += 1;
+                    let mut field_numbers = Vec::with_capacity(field_count);
+                    let mut record_size = 0usize;
+                    for _ in 0..field_count {
+                        field_numbers.push(data[offset]);
+                        record_size += usize::from(data[offset + 1]);
+                        offset += 3;
+                    }
+                    local_sizes[local_message] = record_size;
+                    definitions.insert(global_message, field_numbers);
+                } else {
+                    offset += local_sizes[local_message];
+                }
+            }
+
+            definitions
         }
     }
 }
