@@ -576,10 +576,15 @@ export component AppWindow inherits Window {
     in property <string> connecting-smart-trainer-id;
     in property <string> smart-trainer-connection-status: "No smart trainer connected";
     in property <bool> smart-trainer-connection-error: false;
+    in property <bool> finish-dialog-open: false;
+    in property <string> finish-error;
 
     callback start-ride();
     callback pause-ride();
-    callback reset-ride();
+    callback finish-ride();
+    callback resume-finish-dialog();
+    callback finish-and-discard();
+    callback finish-and-save();
     callback set-ftp(int);
     callback toggle-erg-mode();
     callback previous-stage();
@@ -1229,8 +1234,8 @@ export component AppWindow inherits Window {
                 }
 
                 ActionButton {
-                    text: "Reset";
-                    clicked => { root.reset-ride(); }
+                    text: "Finish";
+                    clicked => { root.finish-ride(); }
                 }
 
                 ActionButton {
@@ -1243,6 +1248,78 @@ export component AppWindow inherits Window {
                     text: "Skip Stage";
                     enabled: root.can-skip-stage;
                     clicked => { root.skip-stage(); }
+                }
+            }
+        }
+    }
+
+    if root.finish-dialog-open : Rectangle {
+        width: root.width;
+        height: root.height;
+        background: #17202a88;
+
+        TouchArea { }
+
+        Rectangle {
+            width: min(560px, root.width - 48px);
+            min-height: 240px;
+            max-height: 292px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: white;
+            border-color: #c7ced6;
+            border-width: 1px;
+            border-radius: 8px;
+
+            VerticalBox {
+                padding: 22px;
+                spacing: 14px;
+
+                Text {
+                    text: "Finish workout?";
+                    color: #17202a;
+                    font-size: 24px;
+                    font-weight: 800;
+                }
+
+                Text {
+                    text: "Save a FIT activity file for upload, discard this ride, or resume where you left off.";
+                    color: #53616f;
+                    font-size: 15px;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.finish-error;
+                    color: #be123c;
+                    font-size: 13px;
+                    min-height: root.finish-error == "" ? 0px : 20px;
+                    visible: root.finish-error != "";
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    background: transparent;
+                    vertical-stretch: 1;
+                }
+
+                HorizontalBox {
+                    spacing: 10px;
+
+                    ActionButton {
+                        text: "Resume";
+                        clicked => { root.resume-finish-dialog(); }
+                    }
+
+                    ActionButton {
+                        text: "Finish and discard";
+                        clicked => { root.finish-and-discard(); }
+                    }
+
+                    ActionButton {
+                        text: "Finish and save";
+                        clicked => { root.finish-and-save(); }
+                    }
                 }
             }
         }

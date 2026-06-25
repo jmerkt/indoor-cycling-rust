@@ -1,6 +1,7 @@
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use indoor_cycling_core::{
     EffortDuration, RideRecorder, Workout, WorkoutDifficulty, WorkoutEngine, WorkoutParameters,
@@ -11,8 +12,8 @@ use indoor_cycling_devices::{
     DiscoveryEvent, SimulatedTrainer, TrainerDevice,
 };
 use indoor_cycling_storage::{
-    AppConfiguration, ConfigurationStore, StoredWorkout, StoredWorkoutStep, WindowConfiguration,
-    WorkoutBuilderConfiguration,
+    AppConfiguration, ConfigurationStore, RideFileStore, StoredWorkout, StoredWorkoutStep,
+    WindowConfiguration, WorkoutBuilderConfiguration,
 };
 use slint::{Model, ModelRc, SharedString, VecModel};
 
@@ -27,6 +28,7 @@ struct AppState {
     trainer: SimulatedTrainer,
     ftp_watts: u16,
     workout_builder: WorkoutBuilderConfiguration,
+    ride_file_store: Option<RideFileStore>,
     window: Option<WindowConfiguration>,
     smart_trainer_connected: bool,
     erg_enabled: bool,
@@ -38,6 +40,7 @@ struct AppState {
     external_heart_rate_bpm: Option<u16>,
     external_cadence_rpm: Option<u16>,
     running: bool,
+    finish_dialog_resume_running: bool,
 }
 
 impl AppState {
@@ -62,6 +65,7 @@ impl AppState {
             trainer,
             ftp_watts,
             workout_builder,
+            ride_file_store: RideFileStore::for_current_user().ok(),
             window: configuration.and_then(|configuration| configuration.window.clone()),
             smart_trainer_connected: false,
             erg_enabled: false,
@@ -73,6 +77,7 @@ impl AppState {
             external_heart_rate_bpm: None,
             external_cadence_rpm: None,
             running: false,
+            finish_dialog_resume_running: false,
         }
     }
 
@@ -93,6 +98,7 @@ impl AppState {
         self.workout.reset();
         self.trainer = trainer;
         self.running = false;
+        self.finish_dialog_resume_running = false;
     }
 }
 
@@ -356,13 +362,80 @@ fn main() -> Result<(), slint::PlatformError> {
         let window_weak = window.as_weak();
         let state = Rc::clone(&state);
         let bluetooth_service = bluetooth_service_handle.clone();
-        window.on_reset_ride(move || {
+        window.on_finish_ride(move || {
+            let mut state = state.borrow_mut();
+            state.finish_dialog_resume_running = state.running;
+            state.running = false;
+            state.workout.pause();
+            disable_erg(&mut state, bluetooth_service.as_deref());
+            if let Some(window) = window_weak.upgrade() {
+                window.set_finish_dialog_open(true);
+                window.set_finish_error("".into());
+                window.set_ride_status("Paused".into());
+                render(&window, &state);
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        window.on_resume_finish_dialog(move || {
+            let mut state = state.borrow_mut();
+            let resume_running = state.finish_dialog_resume_running;
+            state.finish_dialog_resume_running = false;
+            if resume_running {
+                state.running = true;
+                state.workout.start();
+            }
+            if let Some(window) = window_weak.upgrade() {
+                window.set_finish_dialog_open(false);
+                window.set_finish_error("".into());
+                window.set_ride_status(if resume_running { "Riding" } else { "Paused" }.into());
+                render(&window, &state);
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_finish_and_discard(move || {
             let mut state = state.borrow_mut();
             state.reset_ride();
             sync_erg_target(&mut state, bluetooth_service.as_deref());
             if let Some(window) = window_weak.upgrade() {
+                window.set_finish_dialog_open(false);
+                window.set_finish_error("".into());
                 render(&window, &state);
                 window.set_ride_status("Ready".into());
+            }
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_finish_and_save(move || {
+            let mut state = state.borrow_mut();
+            match save_finished_ride(&state) {
+                Ok(path) => {
+                    state.reset_ride();
+                    sync_erg_target(&mut state, bluetooth_service.as_deref());
+                    if let Some(window) = window_weak.upgrade() {
+                        window.set_finish_dialog_open(false);
+                        window.set_finish_error("".into());
+                        render(&window, &state);
+                        window.set_ride_status(format!("Saved {}", path.display()).into());
+                    }
+                }
+                Err(error) => {
+                    if let Some(window) = window_weak.upgrade() {
+                        window.set_finish_error(format!("Save failed: {error}").into());
+                    }
+                }
             }
         });
     }
@@ -766,6 +839,50 @@ fn clear_role_measurement(state: &Rc<RefCell<AppState>>, role: DeviceRole) {
         DeviceRole::Cadence => state.external_cadence_rpm = None,
         DeviceRole::SmartTrainer => {}
     }
+}
+
+fn save_finished_ride(state: &AppState) -> std::io::Result<PathBuf> {
+    let store = state.ride_file_store.as_ref().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "could not determine where to save ride files",
+        )
+    })?;
+    let samples = state.recorder.samples();
+    if samples.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "there are no ride samples to save",
+        ));
+    }
+
+    store.save_fit(&ride_id(state), samples)
+}
+
+fn ride_id(state: &AppState) -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default();
+    let mut workout_name = sanitize_filename(&state.workout.workout().name);
+    if workout_name.is_empty() {
+        workout_name = "workout".to_owned();
+    }
+    format!("{timestamp}-{workout_name}")
+}
+
+fn sanitize_filename(value: &str) -> String {
+    let mut filename = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            filename.push(character.to_ascii_lowercase());
+        } else if character.is_ascii_whitespace() || matches!(character, '-' | '_') {
+            if !filename.ends_with('-') {
+                filename.push('-');
+            }
+        }
+    }
+    filename.trim_matches('-').to_owned()
 }
 
 fn start_ride(window: &slint::Weak<AppWindow>, state: &Rc<RefCell<AppState>>) {
