@@ -4,8 +4,7 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use indoor_cycling_core::{
-    EffortDuration, RideRecorder, Workout, WorkoutDifficulty, WorkoutEngine, WorkoutParameters,
-    WorkoutPhase,
+    RideRecorder, Workout, WorkoutEngine, WorkoutParameters, WorkoutPhase, WorkoutType,
 };
 use indoor_cycling_devices::{
     BluetoothDeviceService, DeviceCapabilities, DeviceId, DeviceMeasurement, DeviceRole,
@@ -20,7 +19,7 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 slint::include_modules!();
 
 const DEFAULT_FTP_WATTS: u16 = 200;
-const CONFIGURATION_VERSION: u8 = 1;
+const CONFIGURATION_VERSION: u8 = 3;
 
 struct AppState {
     recorder: RideRecorder,
@@ -52,7 +51,30 @@ impl AppState {
             .map(|configuration| configuration.ftp_watts.clamp(50, 600))
             .unwrap_or(DEFAULT_FTP_WATTS);
         let workout_builder = configuration
-            .map(|configuration| configuration.workout_builder.clone())
+            .map(|configuration| {
+                let builder = &configuration.workout_builder;
+                if configuration.version < 2 {
+                    legacy_workout_builder_configuration(
+                        builder.length_minutes,
+                        builder.workout_type,
+                        builder.effort_intensity,
+                        builder.recovery_intensity,
+                        builder.effort_duration,
+                        builder.recovery_duration,
+                        builder.variation,
+                    )
+                } else {
+                    workout_builder_configuration(
+                        builder.length_minutes,
+                        builder.workout_type,
+                        builder.effort_intensity,
+                        builder.recovery_intensity,
+                        builder.effort_duration,
+                        builder.recovery_duration,
+                        builder.variation,
+                    )
+                }
+            })
             .unwrap_or_else(default_workout_builder_configuration);
         let workout = configuration
             .map(|configuration| workout_from_stored(&configuration.latest_workout))
@@ -115,7 +137,7 @@ fn main() -> Result<(), slint::PlatformError> {
             }
         });
     let saved_configuration =
-        saved_configuration.filter(|configuration| configuration.version == CONFIGURATION_VERSION);
+        saved_configuration.filter(|configuration| configuration.version <= CONFIGURATION_VERSION);
     let state = Rc::new(RefCell::new(AppState::new(saved_configuration.as_ref())));
     let ride_timer = slint::Timer::default();
     let discovery_timer = slint::Timer::default();
@@ -135,10 +157,14 @@ fn main() -> Result<(), slint::PlatformError> {
             window_size.logical_height,
         ));
     }
-    window.set_draft_length_minutes(state.borrow().workout_builder.length_minutes);
-    window.set_draft_difficulty(state.borrow().workout_builder.difficulty);
-    window.set_draft_effort_duration(state.borrow().workout_builder.effort_duration);
-    window.set_draft_variation(state.borrow().workout_builder.variation);
+    let builder = state.borrow().workout_builder.clone();
+    window.set_draft_length_minutes(builder.length_minutes);
+    window.set_draft_workout_type(builder.workout_type);
+    window.set_draft_effort_intensity(builder.effort_intensity);
+    window.set_draft_recovery_intensity(builder.recovery_intensity);
+    window.set_draft_effort_duration(builder.effort_duration);
+    window.set_draft_recovery_duration(builder.recovery_duration);
+    window.set_draft_variation(builder.variation);
     window.set_ride_status("Ready".into());
     render(&window, &state.borrow());
 
@@ -194,14 +220,23 @@ fn main() -> Result<(), slint::PlatformError> {
         let state = Rc::clone(&state);
         let configuration_store = configuration_store.clone();
         window.on_builder_settings_changed(
-            move |length_minutes, difficulty, effort_duration, variation| {
+            move |length_minutes,
+                  workout_type,
+                  effort_intensity,
+                  recovery_intensity,
+                  effort_duration,
+                  recovery_duration,
+                  variation| {
                 let mut state = state.borrow_mut();
-                state.workout_builder = WorkoutBuilderConfiguration {
-                    length_minutes: length_minutes.clamp(15, 180),
-                    difficulty: difficulty.clamp(0, 4),
-                    effort_duration: effort_duration.clamp(0, 4),
-                    variation: variation.clamp(1, 5),
-                };
+                state.workout_builder = workout_builder_configuration(
+                    length_minutes,
+                    workout_type,
+                    effort_intensity,
+                    recovery_intensity,
+                    effort_duration,
+                    recovery_duration,
+                    variation,
+                );
                 persist_configuration(configuration_store.as_ref(), &state);
             },
         );
@@ -230,34 +265,35 @@ fn main() -> Result<(), slint::PlatformError> {
         let bluetooth_service = bluetooth_service_handle.clone();
         let configuration_store = configuration_store.clone();
         window.on_randomize_workout(
-            move |length_minutes, difficulty, effort_duration, variation| {
+            move |length_minutes,
+                  workout_type,
+                  effort_intensity,
+                  recovery_intensity,
+                  effort_duration,
+                  recovery_duration,
+                  variation| {
+                let builder = workout_builder_configuration(
+                    length_minutes,
+                    workout_type,
+                    effort_intensity,
+                    recovery_intensity,
+                    effort_duration,
+                    recovery_duration,
+                    variation,
+                );
                 let parameters = WorkoutParameters {
-                    duration_minutes: u16::try_from(length_minutes.clamp(15, 180)).unwrap_or(45),
-                    difficulty: match difficulty {
-                        0 => WorkoutDifficulty::Gentle,
-                        1 => WorkoutDifficulty::Easy,
-                        3 => WorkoutDifficulty::Hard,
-                        4 => WorkoutDifficulty::VeryHard,
-                        _ => WorkoutDifficulty::Moderate,
-                    },
-                    effort_duration: match effort_duration {
-                        0 => EffortDuration::VeryShort,
-                        1 => EffortDuration::Short,
-                        3 => EffortDuration::Long,
-                        4 => EffortDuration::VeryLong,
-                        _ => EffortDuration::Medium,
-                    },
-                    variation: u8::try_from(variation.clamp(1, 5)).unwrap_or(2),
+                    duration_minutes: u16::try_from(builder.length_minutes).unwrap_or(45),
+                    workout_type: workout_type_from_level(builder.workout_type),
+                    effort_intensity: workout_level(builder.effort_intensity),
+                    recovery_intensity: workout_level(builder.recovery_intensity),
+                    effort_duration: workout_level(builder.effort_duration),
+                    recovery_duration: workout_level(builder.recovery_duration),
+                    variation: workout_level(builder.variation),
                 };
                 let mut state = state.borrow_mut();
                 state.running = false;
                 state.recorder = RideRecorder::new();
-                state.workout_builder = WorkoutBuilderConfiguration {
-                    length_minutes,
-                    difficulty,
-                    effort_duration,
-                    variation,
-                };
+                state.workout_builder = builder;
                 state.workout = WorkoutEngine::new(Workout::randomized(parameters));
                 apply_current_target(&mut state);
                 sync_erg_target(&mut state, bluetooth_service.as_deref());
@@ -1185,11 +1221,74 @@ fn format_duration(total_secs: u64) -> String {
 }
 
 fn default_workout_builder_configuration() -> WorkoutBuilderConfiguration {
+    workout_builder_configuration(45, 3, 6, 6, 6, 6, 6)
+}
+
+fn legacy_workout_builder_configuration(
+    length_minutes: i32,
+    workout_type: i32,
+    effort_intensity: i32,
+    recovery_intensity: i32,
+    effort_duration: i32,
+    recovery_duration: i32,
+    variation: i32,
+) -> WorkoutBuilderConfiguration {
+    workout_builder_configuration(
+        length_minutes,
+        workout_type,
+        legacy_level(effort_intensity),
+        legacy_level(recovery_intensity),
+        legacy_level(effort_duration),
+        legacy_level(recovery_duration),
+        legacy_level(variation),
+    )
+}
+
+fn workout_builder_configuration(
+    length_minutes: i32,
+    workout_type: i32,
+    effort_intensity: i32,
+    recovery_intensity: i32,
+    effort_duration: i32,
+    recovery_duration: i32,
+    variation: i32,
+) -> WorkoutBuilderConfiguration {
     WorkoutBuilderConfiguration {
-        length_minutes: 45,
-        difficulty: 2,
-        effort_duration: 2,
-        variation: 2,
+        length_minutes: length_minutes.clamp(15, 180),
+        workout_type: workout_type.clamp(0, 8),
+        effort_intensity: effort_intensity.clamp(1, 11),
+        recovery_intensity: recovery_intensity.clamp(1, 11),
+        effort_duration: effort_duration.clamp(1, 11),
+        recovery_duration: recovery_duration.clamp(1, 11),
+        variation: variation.clamp(1, 11),
+    }
+}
+
+fn legacy_level(level: i32) -> i32 {
+    match level {
+        i32::MIN..=0 => 1,
+        1 => 3,
+        2 => 6,
+        3 => 9,
+        _ => 11,
+    }
+}
+
+fn workout_level(level: i32) -> u8 {
+    u8::try_from(level.clamp(1, 11)).unwrap_or(6)
+}
+
+fn workout_type_from_level(level: i32) -> WorkoutType {
+    match level {
+        0 => WorkoutType::Recovery,
+        1 => WorkoutType::Endurance,
+        2 => WorkoutType::Tempo,
+        4 => WorkoutType::Threshold,
+        5 => WorkoutType::OverUnder,
+        6 => WorkoutType::Vo2Max,
+        7 => WorkoutType::Sprinting,
+        8 => WorkoutType::Microbursts,
+        _ => WorkoutType::SweetSpot,
     }
 }
 

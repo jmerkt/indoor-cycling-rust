@@ -50,91 +50,98 @@ impl Workout {
     /// recovery blocks vary slightly on every call while the requested duration
     /// and training intent remain the guardrails.
     pub fn randomized(parameters: WorkoutParameters) -> Self {
+        let parameters = parameters.normalized();
         let total_secs = u64::from(parameters.duration_minutes.clamp(15, 180)) * 60;
-        let warmup_secs = (total_secs / 6).clamp(300, 600);
-        let cooldown_secs = (total_secs / 8).clamp(300, 600);
+        let warmup_secs = parameters.workout_type.warmup_secs(total_secs);
+        let cooldown_secs = parameters.workout_type.cooldown_secs(total_secs);
         let work_budget = total_secs.saturating_sub(warmup_secs + cooldown_secs);
         let mut random = WorkoutRandom::new();
         let mut steps = vec![WorkoutStep::new(
             "Warmup",
             warmup_secs,
-            random.jitter(55, 8),
+            random.jitter(parameters.workout_type.warmup_target(), 5),
         )];
-        let (work_secs, recovery_secs, base_effort) = parameters.effort_profile();
-        let (efforts_per_set, set_recovery_secs) = parameters.set_profile();
-        let recovery_scale_percent = parameters.recovery_scale_percent();
-        let recovery_secs = scale_duration(recovery_secs, recovery_scale_percent);
-        let set_recovery_secs = scale_duration(set_recovery_secs, recovery_scale_percent);
-        let mut remaining = work_budget;
-        let mut interval = 1;
-        let mut efforts_in_set = 0;
-        let mut set = 1;
 
-        while remaining >= 90 {
-            let effort_duration = random
-                .jitter(work_secs, parameters.variation as u16 * 10)
-                .clamp(30, remaining.saturating_sub(30) as u16);
-            let effort_percent = random
-                .jitter(base_effort, parameters.variation as u16 * 3)
-                .clamp(55, 150);
-            steps.push(WorkoutStep::new(
-                format!("Effort {interval}"),
-                u64::from(effort_duration),
-                effort_percent,
-            ));
-            remaining = remaining.saturating_sub(u64::from(effort_duration));
-
-            if remaining < 45 {
-                break;
-            }
-
-            efforts_in_set += 1;
-            let is_set_break = efforts_in_set >= efforts_per_set
-                && remaining >= u64::from(set_recovery_secs.saturating_add(30));
-            let base_recovery_secs = if is_set_break {
-                set_recovery_secs
-            } else {
-                recovery_secs
-            };
-            let recovery_duration = random
-                .jitter(base_recovery_secs, parameters.variation as u16 * 12)
-                .clamp(30, remaining as u16);
-            let recovery_percent = random
-                .jitter(50, parameters.variation as u16 * 3)
-                .clamp(40, 65);
-            steps.push(WorkoutStep::new(
-                if is_set_break {
-                    format!("Set Recovery {set}")
-                } else {
-                    format!("Recovery {interval}")
+        match parameters.workout_type {
+            WorkoutType::Recovery => build_steady_session(
+                &mut steps,
+                work_budget,
+                &mut random,
+                parameters,
+                SteadySpec {
+                    block_name: "Recovery Spin",
+                    relief_name: None,
+                    block_secs: [180, 240, 300, 360, 420, 480, 600, 720, 900, 1050, 1200],
+                    target_low: 40,
+                    target_high: 55,
+                    relief_target_low: 35,
+                    relief_target_high: 45,
                 },
-                u64::from(recovery_duration),
-                recovery_percent,
-            ));
-            remaining = remaining.saturating_sub(u64::from(recovery_duration));
-            if is_set_break {
-                efforts_in_set = 0;
-                set += 1;
+            ),
+            WorkoutType::Endurance => build_steady_session(
+                &mut steps,
+                work_budget,
+                &mut random,
+                parameters,
+                SteadySpec {
+                    block_name: "Endurance",
+                    relief_name: Some("Easy Spin"),
+                    block_secs: [300, 420, 600, 720, 900, 1050, 1200, 1500, 1800, 2100, 2400],
+                    target_low: 58,
+                    target_high: 75,
+                    relief_target_low: 45,
+                    relief_target_high: 60,
+                },
+            ),
+            WorkoutType::Tempo => build_interval_session(
+                &mut steps,
+                work_budget,
+                &mut random,
+                parameters,
+                IntervalSpec::tempo(),
+            ),
+            WorkoutType::SweetSpot => build_interval_session(
+                &mut steps,
+                work_budget,
+                &mut random,
+                parameters,
+                IntervalSpec::sweet_spot(),
+            ),
+            WorkoutType::Threshold => build_interval_session(
+                &mut steps,
+                work_budget,
+                &mut random,
+                parameters,
+                IntervalSpec::threshold(),
+            ),
+            WorkoutType::OverUnder => {
+                build_over_under_session(&mut steps, work_budget, &mut random, parameters)
             }
-            interval += 1;
+            WorkoutType::Vo2Max => build_interval_session(
+                &mut steps,
+                work_budget,
+                &mut random,
+                parameters,
+                IntervalSpec::vo2_max(),
+            ),
+            WorkoutType::Sprinting => build_interval_session(
+                &mut steps,
+                work_budget,
+                &mut random,
+                parameters,
+                IntervalSpec::sprinting(),
+            ),
+            WorkoutType::Microbursts => {
+                build_microburst_session(&mut steps, work_budget, &mut random, parameters)
+            }
         }
 
-        if remaining > 0 {
-            steps.push(WorkoutStep::new("Endurance", remaining, 70));
-        }
         steps.push(WorkoutStep::new(
             "Cooldown",
             cooldown_secs,
-            random.jitter(45, 6),
+            random.jitter(parameters.workout_type.cooldown_target(), 5),
         ));
-        Self::new(
-            format!(
-                "{} {} Intervals",
-                parameters.difficulty.label(),
-                parameters.effort_duration.label()
-            ),
-            steps,
-        )
+        Self::new(parameters.workout_type.workout_name(), steps)
     }
 
     pub fn total_duration_secs(&self) -> u64 {
@@ -143,7 +150,7 @@ impl Workout {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkoutDifficulty {
+pub enum EffortIntensity {
     Gentle,
     Easy,
     Moderate,
@@ -151,17 +158,7 @@ pub enum WorkoutDifficulty {
     VeryHard,
 }
 
-impl WorkoutDifficulty {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Gentle => "Gentle",
-            Self::Easy => "Easy",
-            Self::Moderate => "Moderate",
-            Self::Hard => "Hard",
-            Self::VeryHard => "Very Hard",
-        }
-    }
-}
+pub type WorkoutDifficulty = EffortIntensity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EffortDuration {
@@ -172,14 +169,88 @@ pub enum EffortDuration {
     VeryLong,
 }
 
-impl EffortDuration {
-    fn label(self) -> &'static str {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryIntensity {
+    VeryEasy,
+    Easy,
+    Moderate,
+    Steady,
+    Strong,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryDuration {
+    VeryShort,
+    Short,
+    Medium,
+    Long,
+    VeryLong,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkoutType {
+    Recovery,
+    Endurance,
+    Tempo,
+    SweetSpot,
+    Threshold,
+    OverUnder,
+    Vo2Max,
+    Sprinting,
+    Microbursts,
+}
+
+impl WorkoutType {
+    fn workout_name(self) -> &'static str {
         match self {
-            Self::VeryShort => "Very Short",
-            Self::Short => "Short",
-            Self::Medium => "Medium",
-            Self::Long => "Long",
-            Self::VeryLong => "Very Long",
+            Self::Recovery => "Recovery Ride",
+            Self::Endurance => "Endurance Ride",
+            Self::Tempo => "Tempo Intervals",
+            Self::SweetSpot => "Sweet Spot Intervals",
+            Self::Threshold => "Threshold Intervals",
+            Self::OverUnder => "Over-Under Intervals",
+            Self::Vo2Max => "VO2 Max Intervals",
+            Self::Sprinting => "Sprint Intervals",
+            Self::Microbursts => "Microburst Intervals",
+        }
+    }
+
+    fn warmup_secs(self, total_secs: u64) -> u64 {
+        match self {
+            Self::Recovery | Self::Endurance => (total_secs / 10).clamp(180, 480),
+            Self::Tempo | Self::SweetSpot => (total_secs / 7).clamp(300, 600),
+            Self::Threshold
+            | Self::OverUnder
+            | Self::Vo2Max
+            | Self::Sprinting
+            | Self::Microbursts => (total_secs / 6).clamp(420, 720),
+        }
+    }
+
+    fn cooldown_secs(self, total_secs: u64) -> u64 {
+        match self {
+            Self::Recovery | Self::Endurance => (total_secs / 12).clamp(180, 420),
+            _ => (total_secs / 8).clamp(300, 600),
+        }
+    }
+
+    fn warmup_target(self) -> u16 {
+        match self {
+            Self::Recovery => 42,
+            Self::Endurance => 50,
+            Self::Tempo | Self::SweetSpot => 55,
+            Self::Threshold
+            | Self::OverUnder
+            | Self::Vo2Max
+            | Self::Sprinting
+            | Self::Microbursts => 58,
+        }
+    }
+
+    fn cooldown_target(self) -> u16 {
+        match self {
+            Self::Recovery => 38,
+            _ => 45,
         }
     }
 }
@@ -187,74 +258,562 @@ impl EffortDuration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkoutParameters {
     pub duration_minutes: u16,
-    pub difficulty: WorkoutDifficulty,
-    pub effort_duration: EffortDuration,
-    /// 1 is subtle variety; higher values allow more change in each block.
+    pub workout_type: WorkoutType,
+    /// Effort target level from 1 to 11.
+    pub effort_intensity: u8,
+    /// Recovery target level from 1 to 11.
+    pub recovery_intensity: u8,
+    /// Effort block duration level from 1 to 11.
+    pub effort_duration: u8,
+    /// Recovery block duration level from 1 to 11.
+    pub recovery_duration: u8,
+    /// 1 is subtle variety; 11 allows large changes in each block.
     pub variation: u8,
 }
 
 impl WorkoutParameters {
-    fn effort_profile(self) -> (u16, u16, u16) {
-        let (work_secs, recovery_secs) = match self.effort_duration {
-            EffortDuration::VeryShort => (30, 60),
-            EffortDuration::Short => (60, 75),
-            EffortDuration::Medium => (300, 180),
-            EffortDuration::Long => (600, 240),
-            EffortDuration::VeryLong => (900, 300),
-        };
-        let effort_percent = match (self.difficulty, self.effort_duration) {
-            (WorkoutDifficulty::Gentle, EffortDuration::VeryShort) => 100,
-            (WorkoutDifficulty::Gentle, EffortDuration::Short) => 78,
-            (WorkoutDifficulty::Gentle, EffortDuration::Medium) => 75,
-            (WorkoutDifficulty::Gentle, EffortDuration::Long) => 72,
-            (WorkoutDifficulty::Gentle, EffortDuration::VeryLong) => 70,
-            (WorkoutDifficulty::Easy, EffortDuration::VeryShort) => 115,
-            (WorkoutDifficulty::Easy, EffortDuration::Short) => 92,
-            (WorkoutDifficulty::Easy, EffortDuration::Medium) => 86,
-            (WorkoutDifficulty::Easy, EffortDuration::Long) => 80,
-            (WorkoutDifficulty::Easy, EffortDuration::VeryLong) => 76,
-            (WorkoutDifficulty::Moderate, EffortDuration::VeryShort) => 125,
-            (WorkoutDifficulty::Moderate, EffortDuration::Short) => 105,
-            (WorkoutDifficulty::Moderate, EffortDuration::Medium) => 94,
-            (WorkoutDifficulty::Moderate, EffortDuration::Long) => 88,
-            (WorkoutDifficulty::Moderate, EffortDuration::VeryLong) => 84,
-            (WorkoutDifficulty::Hard, EffortDuration::VeryShort) => 135,
-            (WorkoutDifficulty::Hard, EffortDuration::Short) => 120,
-            (WorkoutDifficulty::Hard, EffortDuration::Medium) => 105,
-            (WorkoutDifficulty::Hard, EffortDuration::Long) => 96,
-            (WorkoutDifficulty::Hard, EffortDuration::VeryLong) => 91,
-            (WorkoutDifficulty::VeryHard, EffortDuration::VeryShort) => 145,
-            (WorkoutDifficulty::VeryHard, EffortDuration::Short) => 135,
-            (WorkoutDifficulty::VeryHard, EffortDuration::Medium) => 115,
-            (WorkoutDifficulty::VeryHard, EffortDuration::Long) => 105,
-            (WorkoutDifficulty::VeryHard, EffortDuration::VeryLong) => 98,
-        };
-        (work_secs, recovery_secs, effort_percent)
-    }
-
-    fn set_profile(self) -> (u16, u16) {
-        match self.effort_duration {
-            EffortDuration::VeryShort => (5, 180),
-            EffortDuration::Short => (4, 240),
-            EffortDuration::Medium => (2, 300),
-            EffortDuration::Long | EffortDuration::VeryLong => (2, 360),
-        }
-    }
-
-    fn recovery_scale_percent(self) -> u16 {
-        match self.difficulty {
-            WorkoutDifficulty::Gentle => 140,
-            WorkoutDifficulty::Easy => 120,
-            WorkoutDifficulty::Moderate => 100,
-            WorkoutDifficulty::Hard => 85,
-            WorkoutDifficulty::VeryHard => 70,
+    fn normalized(self) -> Self {
+        Self {
+            duration_minutes: self.duration_minutes.clamp(15, 180),
+            workout_type: self.workout_type,
+            effort_intensity: self.effort_intensity.clamp(1, 11),
+            recovery_intensity: self.recovery_intensity.clamp(1, 11),
+            effort_duration: self.effort_duration.clamp(1, 11),
+            recovery_duration: self.recovery_duration.clamp(1, 11),
+            variation: self.variation.clamp(1, 11),
         }
     }
 }
 
-fn scale_duration(duration_secs: u16, percent: u16) -> u16 {
-    let scaled = u32::from(duration_secs) * u32::from(percent) / 100;
-    u16::try_from(scaled).unwrap_or(u16::MAX).max(30)
+fn duration_level_secs(level: u8, values: &[u16; 11]) -> u16 {
+    values[usize::from(level_index(level))]
+}
+
+fn level_index(level: u8) -> u8 {
+    level.clamp(1, 11) - 1
+}
+
+fn level_to_percent(level: u8, low: u16, high: u16) -> u16 {
+    let span = high.saturating_sub(low);
+    low + (span * u16::from(level_index(level)) + 5) / 10
+}
+
+fn duration_jitter_radius(base_secs: u16, variation: u8) -> u16 {
+    let radius = u32::from(base_secs) * u32::from(level_index(variation)) / 35;
+    u16::try_from(radius).unwrap_or(u16::MAX)
+}
+
+fn power_jitter_radius(variation: u8, multiplier: u16) -> u16 {
+    1 + u16::from(level_index(variation)) * multiplier / 4
+}
+
+fn push_fill(steps: &mut Vec<WorkoutStep>, name: &str, duration_secs: u64, target_percent: u16) {
+    if duration_secs > 0 {
+        steps.push(WorkoutStep::new(name, duration_secs, target_percent));
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SteadySpec {
+    block_name: &'static str,
+    relief_name: Option<&'static str>,
+    block_secs: [u16; 11],
+    target_low: u16,
+    target_high: u16,
+    relief_target_low: u16,
+    relief_target_high: u16,
+}
+
+fn build_steady_session(
+    steps: &mut Vec<WorkoutStep>,
+    mut remaining: u64,
+    random: &mut WorkoutRandom,
+    parameters: WorkoutParameters,
+    spec: SteadySpec,
+) {
+    let base_block_secs = duration_level_secs(parameters.effort_duration, &spec.block_secs);
+    let target = level_to_percent(
+        parameters.effort_intensity,
+        spec.target_low,
+        spec.target_high,
+    );
+    let relief_target = level_to_percent(
+        parameters.recovery_intensity,
+        spec.relief_target_low,
+        spec.relief_target_high,
+    );
+    let relief_secs = duration_level_secs(
+        parameters.recovery_duration,
+        &[60, 90, 120, 150, 180, 240, 300, 360, 420, 480, 600],
+    );
+    let mut block = 1;
+
+    while remaining > 0 {
+        let duration =
+            jitter_duration(random, base_block_secs, parameters.variation, 60, remaining);
+        let percent = random
+            .jitter(target, power_jitter_radius(parameters.variation, 1))
+            .clamp(spec.target_low, spec.target_high);
+        steps.push(WorkoutStep::new(
+            format!("{} {block}", spec.block_name),
+            duration,
+            percent,
+        ));
+        remaining = remaining.saturating_sub(duration);
+
+        if let Some(relief_name) = spec.relief_name {
+            if remaining >= 180 {
+                let relief_duration =
+                    jitter_duration(random, relief_secs, parameters.variation, 60, remaining);
+                let relief_percent = random
+                    .jitter(relief_target, power_jitter_radius(parameters.variation, 1))
+                    .clamp(spec.relief_target_low, spec.relief_target_high);
+                steps.push(WorkoutStep::new(
+                    format!("{relief_name} {block}"),
+                    relief_duration,
+                    relief_percent,
+                ));
+                remaining = remaining.saturating_sub(relief_duration);
+            }
+        }
+
+        block += 1;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct IntervalSpec {
+    effort_name: &'static str,
+    recovery_name: &'static str,
+    filler_name: &'static str,
+    effort_secs: [u16; 11],
+    recovery_secs: [u16; 11],
+    effort_low: u16,
+    effort_high: u16,
+    recovery_low: u16,
+    recovery_high: u16,
+    min_effort_secs: u16,
+    max_effort_secs: u16,
+    efforts_per_set: u16,
+    set_recovery_multiplier: u16,
+    power_jitter_multiplier: u16,
+}
+
+impl IntervalSpec {
+    fn tempo() -> Self {
+        Self {
+            effort_name: "Tempo",
+            recovery_name: "Recovery",
+            filler_name: "Endurance",
+            effort_secs: [180, 240, 300, 360, 420, 480, 600, 720, 900, 1050, 1200],
+            recovery_secs: [60, 90, 120, 150, 180, 240, 300, 360, 420, 480, 600],
+            effort_low: 76,
+            effort_high: 90,
+            recovery_low: 45,
+            recovery_high: 65,
+            min_effort_secs: 120,
+            max_effort_secs: 1500,
+            efforts_per_set: 3,
+            set_recovery_multiplier: 2,
+            power_jitter_multiplier: 1,
+        }
+    }
+
+    fn sweet_spot() -> Self {
+        Self {
+            effort_name: "Sweet Spot",
+            recovery_name: "Recovery",
+            filler_name: "Endurance",
+            effort_secs: [240, 300, 360, 420, 480, 600, 720, 900, 1020, 1200, 1500],
+            recovery_secs: [60, 90, 120, 150, 180, 240, 300, 360, 420, 480, 600],
+            effort_low: 88,
+            effort_high: 94,
+            recovery_low: 40,
+            recovery_high: 60,
+            min_effort_secs: 180,
+            max_effort_secs: 1800,
+            efforts_per_set: 2,
+            set_recovery_multiplier: 2,
+            power_jitter_multiplier: 1,
+        }
+    }
+
+    fn threshold() -> Self {
+        Self {
+            effort_name: "Threshold",
+            recovery_name: "Recovery",
+            filler_name: "Endurance",
+            effort_secs: [180, 240, 300, 360, 420, 480, 600, 720, 900, 1020, 1200],
+            recovery_secs: [120, 150, 180, 210, 240, 300, 360, 420, 480, 600, 720],
+            effort_low: 95,
+            effort_high: 105,
+            recovery_low: 40,
+            recovery_high: 60,
+            min_effort_secs: 180,
+            max_effort_secs: 1200,
+            efforts_per_set: 2,
+            set_recovery_multiplier: 2,
+            power_jitter_multiplier: 1,
+        }
+    }
+
+    fn vo2_max() -> Self {
+        Self {
+            effort_name: "VO2 Max",
+            recovery_name: "Recovery",
+            filler_name: "Endurance",
+            effort_secs: [45, 60, 75, 90, 120, 150, 180, 210, 240, 270, 300],
+            recovery_secs: [60, 75, 90, 120, 150, 180, 210, 240, 270, 300, 360],
+            effort_low: 106,
+            effort_high: 120,
+            recovery_low: 35,
+            recovery_high: 55,
+            min_effort_secs: 45,
+            max_effort_secs: 360,
+            efforts_per_set: 4,
+            set_recovery_multiplier: 2,
+            power_jitter_multiplier: 1,
+        }
+    }
+
+    fn sprinting() -> Self {
+        Self {
+            effort_name: "Sprint",
+            recovery_name: "Easy Spin",
+            filler_name: "Easy Spin",
+            effort_secs: [10, 12, 15, 20, 25, 30, 35, 40, 45, 60, 75],
+            recovery_secs: [90, 120, 150, 180, 210, 240, 300, 360, 420, 480, 600],
+            effort_low: 125,
+            effort_high: 170,
+            recovery_low: 30,
+            recovery_high: 50,
+            min_effort_secs: 10,
+            max_effort_secs: 90,
+            efforts_per_set: 5,
+            set_recovery_multiplier: 2,
+            power_jitter_multiplier: 3,
+        }
+    }
+}
+
+fn build_interval_session(
+    steps: &mut Vec<WorkoutStep>,
+    mut remaining: u64,
+    random: &mut WorkoutRandom,
+    parameters: WorkoutParameters,
+    spec: IntervalSpec,
+) {
+    let base_effort_secs = duration_level_secs(parameters.effort_duration, &spec.effort_secs);
+    let base_recovery_secs = duration_level_secs(parameters.recovery_duration, &spec.recovery_secs);
+    let effort_target = level_to_percent(
+        parameters.effort_intensity,
+        spec.effort_low,
+        spec.effort_high,
+    );
+    let recovery_target = level_to_percent(
+        parameters.recovery_intensity,
+        spec.recovery_low,
+        spec.recovery_high,
+    );
+    let mut interval = 1;
+    let mut set = 1;
+    let mut intervals_in_set = 0;
+
+    while remaining >= u64::from(spec.min_effort_secs) {
+        let reserve_recovery = if remaining >= u64::from(spec.min_effort_secs + 60) {
+            30
+        } else {
+            0
+        };
+        let max_effort = remaining
+            .saturating_sub(reserve_recovery)
+            .min(u64::from(spec.max_effort_secs));
+        let effort_duration = jitter_duration(
+            random,
+            base_effort_secs,
+            parameters.variation,
+            spec.min_effort_secs,
+            max_effort,
+        );
+        let effort_percent = random
+            .jitter(
+                effort_target,
+                power_jitter_radius(parameters.variation, spec.power_jitter_multiplier),
+            )
+            .clamp(spec.effort_low, spec.effort_high);
+        steps.push(WorkoutStep::new(
+            format!("{} {interval}", spec.effort_name),
+            effort_duration,
+            effort_percent,
+        ));
+        remaining = remaining.saturating_sub(effort_duration);
+
+        if remaining < 45 {
+            break;
+        }
+
+        intervals_in_set += 1;
+        let is_set_recovery = intervals_in_set >= spec.efforts_per_set && remaining >= 120;
+        let recovery_base = if is_set_recovery {
+            base_recovery_secs.saturating_mul(spec.set_recovery_multiplier)
+        } else {
+            base_recovery_secs
+        };
+        let recovery_duration =
+            jitter_duration(random, recovery_base, parameters.variation, 30, remaining);
+        let recovery_percent = random
+            .jitter(
+                recovery_target,
+                power_jitter_radius(parameters.variation, 1),
+            )
+            .clamp(spec.recovery_low, spec.recovery_high);
+        steps.push(WorkoutStep::new(
+            if is_set_recovery {
+                format!("Set Recovery {set}")
+            } else {
+                format!("{} {interval}", spec.recovery_name)
+            },
+            recovery_duration,
+            recovery_percent,
+        ));
+        remaining = remaining.saturating_sub(recovery_duration);
+
+        if is_set_recovery {
+            intervals_in_set = 0;
+            set += 1;
+        }
+        interval += 1;
+    }
+
+    push_fill(steps, spec.filler_name, remaining, 65);
+}
+
+fn build_over_under_session(
+    steps: &mut Vec<WorkoutStep>,
+    mut remaining: u64,
+    random: &mut WorkoutRandom,
+    parameters: WorkoutParameters,
+) {
+    let under_secs = duration_level_secs(
+        parameters.effort_duration,
+        &[45, 60, 75, 90, 120, 150, 180, 210, 240, 300, 360],
+    );
+    let over_secs = (under_secs / 2).clamp(30, 180);
+    let recovery_secs = duration_level_secs(
+        parameters.recovery_duration,
+        &[90, 120, 150, 180, 210, 240, 300, 360, 420, 480, 600],
+    );
+    let under_target = level_to_percent(parameters.effort_intensity, 88, 96);
+    let over_target = level_to_percent(parameters.effort_intensity, 102, 112);
+    let recovery_target = level_to_percent(parameters.recovery_intensity, 40, 60);
+    let repeats_per_set = match parameters.effort_duration {
+        1..=3 => 6,
+        4..=7 => 5,
+        _ => 4,
+    };
+    let mut set = 1;
+
+    while remaining >= u64::from(under_secs + over_secs + 60) {
+        for repeat in 1..=repeats_per_set {
+            if remaining < u64::from(under_secs + over_secs) {
+                break;
+            }
+            let under_duration = jitter_duration(
+                random,
+                under_secs,
+                parameters.variation,
+                30,
+                remaining.saturating_sub(u64::from(over_secs)),
+            );
+            let under_percent = random
+                .jitter(under_target, power_jitter_radius(parameters.variation, 1))
+                .clamp(88, 96);
+            steps.push(WorkoutStep::new(
+                format!("Under {set}.{repeat}"),
+                under_duration,
+                under_percent,
+            ));
+            remaining = remaining.saturating_sub(under_duration);
+
+            if remaining < 30 {
+                break;
+            }
+
+            let over_duration =
+                jitter_duration(random, over_secs, parameters.variation, 30, remaining);
+            let over_percent = random
+                .jitter(over_target, power_jitter_radius(parameters.variation, 1))
+                .clamp(102, 112);
+            steps.push(WorkoutStep::new(
+                format!("Over {set}.{repeat}"),
+                over_duration,
+                over_percent,
+            ));
+            remaining = remaining.saturating_sub(over_duration);
+        }
+
+        if remaining < 60 {
+            break;
+        }
+
+        let recovery_duration =
+            jitter_duration(random, recovery_secs, parameters.variation, 60, remaining);
+        let recovery_percent = random
+            .jitter(
+                recovery_target,
+                power_jitter_radius(parameters.variation, 1),
+            )
+            .clamp(40, 60);
+        steps.push(WorkoutStep::new(
+            format!("Set Recovery {set}"),
+            recovery_duration,
+            recovery_percent,
+        ));
+        remaining = remaining.saturating_sub(recovery_duration);
+        set += 1;
+    }
+
+    push_fill(steps, "Endurance", remaining, 65);
+}
+
+fn build_microburst_session(
+    steps: &mut Vec<WorkoutStep>,
+    mut remaining: u64,
+    random: &mut WorkoutRandom,
+    parameters: WorkoutParameters,
+) {
+    let effort_secs = duration_level_secs(
+        parameters.effort_duration,
+        &[15, 20, 25, 30, 30, 35, 40, 40, 45, 50, 60],
+    );
+    let float_secs = duration_level_secs(
+        parameters.recovery_duration,
+        &[10, 15, 20, 20, 30, 30, 40, 45, 45, 60, 75],
+    );
+    let set_recovery_secs = duration_level_secs(
+        parameters.recovery_duration,
+        &[120, 150, 180, 210, 240, 300, 360, 420, 480, 540, 600],
+    );
+    let effort_target = level_to_percent(parameters.effort_intensity, 110, 140);
+    let float_target = level_to_percent(parameters.recovery_intensity, 35, 85);
+    let set_recovery_target = level_to_percent(parameters.recovery_intensity, 35, 60);
+    let min_cycle_secs = u64::from(effort_secs + float_secs);
+    let base_repeats_per_set = (480 / (effort_secs + float_secs)).clamp(4, 14);
+    let repeat_radius = u16::from(level_index(parameters.variation)) / 5;
+    let mut set = 1;
+
+    while remaining >= min_cycle_secs {
+        let repeats_this_set = random
+            .jitter(base_repeats_per_set, repeat_radius)
+            .clamp(4, 16);
+
+        for repeat in 1..=repeats_this_set {
+            if remaining < min_cycle_secs {
+                break;
+            }
+
+            let effort_duration = jitter_short_duration(
+                random,
+                effort_secs,
+                parameters.variation,
+                10,
+                remaining.saturating_sub(u64::from(float_secs)),
+            );
+            let effort_percent = random
+                .jitter(effort_target, power_jitter_radius(parameters.variation, 2))
+                .clamp(110, 140);
+            steps.push(WorkoutStep::new(
+                format!("Microburst {set}.{repeat}"),
+                effort_duration,
+                effort_percent,
+            ));
+            remaining = remaining.saturating_sub(effort_duration);
+
+            if remaining < 10 {
+                break;
+            }
+
+            let float_duration =
+                jitter_short_duration(random, float_secs, parameters.variation, 10, remaining);
+            let float_percent = random
+                .jitter(float_target, power_jitter_radius(parameters.variation, 1))
+                .clamp(35, 85);
+            steps.push(WorkoutStep::new(
+                format!("Float {set}.{repeat}"),
+                float_duration,
+                float_percent,
+            ));
+            remaining = remaining.saturating_sub(float_duration);
+        }
+
+        if remaining < min_cycle_secs + 60 {
+            break;
+        }
+
+        let recovery_duration = jitter_duration(
+            random,
+            set_recovery_secs,
+            parameters.variation,
+            60,
+            remaining.saturating_sub(min_cycle_secs),
+        );
+        let recovery_percent = random
+            .jitter(
+                set_recovery_target,
+                power_jitter_radius(parameters.variation, 1),
+            )
+            .clamp(35, 60);
+        steps.push(WorkoutStep::new(
+            format!("Set Recovery {set}"),
+            recovery_duration,
+            recovery_percent,
+        ));
+        remaining = remaining.saturating_sub(recovery_duration);
+        set += 1;
+    }
+
+    push_fill(steps, "Easy Spin", remaining, set_recovery_target);
+}
+
+fn jitter_duration(
+    random: &mut WorkoutRandom,
+    base_secs: u16,
+    variation: u8,
+    minimum_secs: u16,
+    remaining_secs: u64,
+) -> u64 {
+    let maximum_secs = remaining_secs.min(u64::from(u16::MAX)) as u16;
+    if maximum_secs <= minimum_secs {
+        return u64::from(maximum_secs);
+    }
+    u64::from(
+        random
+            .jitter(base_secs, duration_jitter_radius(base_secs, variation))
+            .clamp(minimum_secs, maximum_secs),
+    )
+}
+
+fn jitter_short_duration(
+    random: &mut WorkoutRandom,
+    base_secs: u16,
+    variation: u8,
+    minimum_secs: u16,
+    remaining_secs: u64,
+) -> u64 {
+    let maximum_secs = remaining_secs.min(u64::from(u16::MAX)) as u16;
+    if maximum_secs <= minimum_secs {
+        return u64::from(maximum_secs);
+    }
+    let radius = if level_index(variation) == 0 {
+        0
+    } else {
+        duration_jitter_radius(base_secs, variation).max(2) / 2
+    };
+    u64::from(
+        random
+            .jitter(base_secs, radius)
+            .clamp(minimum_secs, maximum_secs),
+    )
 }
 
 struct WorkoutRandom(u64);
@@ -496,8 +1055,11 @@ mod tests {
     fn randomized_workout_has_warmup_cooldown_and_requested_duration() {
         let workout = Workout::randomized(WorkoutParameters {
             duration_minutes: 45,
-            difficulty: WorkoutDifficulty::Hard,
-            effort_duration: EffortDuration::Short,
+            workout_type: WorkoutType::SweetSpot,
+            effort_intensity: 11,
+            recovery_intensity: 6,
+            effort_duration: 7,
+            recovery_duration: 6,
             variation: 3,
         });
 
@@ -507,20 +1069,23 @@ mod tests {
         assert!(workout
             .steps
             .iter()
-            .any(|step| step.name.starts_with("Recovery")));
+            .any(|step| step.name.starts_with("Sweet Spot")));
         assert!(workout
             .steps
             .iter()
-            .filter(|step| step.name.starts_with("Effort"))
-            .all(|step| step.target_ftp_percent > 100));
+            .filter(|step| step.name.starts_with("Sweet Spot"))
+            .all(|step| (88..=94).contains(&step.target_ftp_percent)));
     }
 
     #[test]
     fn randomized_workout_places_long_recovery_between_sets() {
         let workout = Workout::randomized(WorkoutParameters {
             duration_minutes: 45,
-            difficulty: WorkoutDifficulty::Moderate,
-            effort_duration: EffortDuration::Medium,
+            workout_type: WorkoutType::Threshold,
+            effort_intensity: 6,
+            recovery_intensity: 6,
+            effort_duration: 7,
+            recovery_duration: 8,
             variation: 2,
         });
 
@@ -534,22 +1099,192 @@ mod tests {
     }
 
     #[test]
-    fn difficulty_scales_recovery_duration() {
-        let gentle = WorkoutParameters {
+    fn vo2_workout_keeps_efforts_in_vo2_range() {
+        let workout = Workout::randomized(WorkoutParameters {
             duration_minutes: 45,
-            difficulty: WorkoutDifficulty::Gentle,
-            effort_duration: EffortDuration::Medium,
-            variation: 1,
-        };
-        let very_hard = WorkoutParameters {
-            difficulty: WorkoutDifficulty::VeryHard,
-            ..gentle
-        };
+            workout_type: WorkoutType::Vo2Max,
+            effort_intensity: 11,
+            recovery_intensity: 6,
+            effort_duration: 11,
+            recovery_duration: 6,
+            variation: 5,
+        });
 
-        assert!(gentle.recovery_scale_percent() > very_hard.recovery_scale_percent());
-        assert!(
-            scale_duration(300, gentle.recovery_scale_percent())
-                > scale_duration(300, very_hard.recovery_scale_percent())
-        );
+        let efforts: Vec<_> = workout
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("VO2 Max"))
+            .collect();
+        assert!(!efforts.is_empty());
+        assert!(efforts
+            .iter()
+            .all(|step| (106..=120).contains(&step.target_ftp_percent)));
+        assert!(efforts.iter().all(|step| step.duration_secs <= 360));
+    }
+
+    #[test]
+    fn sprint_workout_keeps_efforts_short_and_anaerobic() {
+        let workout = Workout::randomized(WorkoutParameters {
+            duration_minutes: 45,
+            workout_type: WorkoutType::Sprinting,
+            effort_intensity: 11,
+            recovery_intensity: 4,
+            effort_duration: 11,
+            recovery_duration: 8,
+            variation: 4,
+        });
+
+        let sprints: Vec<_> = workout
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Sprint"))
+            .collect();
+        assert!(!sprints.is_empty());
+        assert!(sprints.iter().all(|step| step.target_ftp_percent >= 125));
+        assert!(sprints.iter().all(|step| step.duration_secs <= 90));
+    }
+
+    #[test]
+    fn recovery_workout_stays_easy() {
+        let workout = Workout::randomized(WorkoutParameters {
+            duration_minutes: 45,
+            workout_type: WorkoutType::Recovery,
+            effort_intensity: 11,
+            recovery_intensity: 11,
+            effort_duration: 6,
+            recovery_duration: 6,
+            variation: 11,
+        });
+
+        assert!(workout
+            .steps
+            .iter()
+            .filter(|step| !matches!(step.name.as_str(), "Warmup" | "Cooldown"))
+            .all(|step| step.target_ftp_percent <= 55));
+    }
+
+    #[test]
+    fn all_common_workout_types_keep_requested_duration() {
+        for workout_type in [
+            WorkoutType::Recovery,
+            WorkoutType::Endurance,
+            WorkoutType::Tempo,
+            WorkoutType::SweetSpot,
+            WorkoutType::Threshold,
+            WorkoutType::OverUnder,
+            WorkoutType::Vo2Max,
+            WorkoutType::Sprinting,
+            WorkoutType::Microbursts,
+        ] {
+            let workout = Workout::randomized(WorkoutParameters {
+                duration_minutes: 50,
+                workout_type,
+                effort_intensity: 6,
+                recovery_intensity: 6,
+                effort_duration: 6,
+                recovery_duration: 6,
+                variation: 6,
+            });
+
+            assert_eq!(workout.total_duration_secs(), 50 * 60);
+            assert_eq!(workout.steps.first().unwrap().name, "Warmup");
+            assert_eq!(workout.steps.last().unwrap().name, "Cooldown");
+        }
+    }
+
+    #[test]
+    fn over_under_workout_contains_both_sides_of_threshold() {
+        let workout = Workout::randomized(WorkoutParameters {
+            duration_minutes: 50,
+            workout_type: WorkoutType::OverUnder,
+            effort_intensity: 8,
+            recovery_intensity: 6,
+            effort_duration: 6,
+            recovery_duration: 6,
+            variation: 4,
+        });
+
+        assert!(workout
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Under"))
+            .all(|step| (88..=96).contains(&step.target_ftp_percent)));
+        assert!(workout
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Over"))
+            .all(|step| (102..=112).contains(&step.target_ftp_percent)));
+        assert!(workout
+            .steps
+            .iter()
+            .any(|step| step.name.starts_with("Under")));
+        assert!(workout
+            .steps
+            .iter()
+            .any(|step| step.name.starts_with("Over")));
+    }
+
+    #[test]
+    fn microburst_workout_can_create_forty_twenty_blocks() {
+        let workout = Workout::randomized(WorkoutParameters {
+            duration_minutes: 45,
+            workout_type: WorkoutType::Microbursts,
+            effort_intensity: 6,
+            recovery_intensity: 11,
+            effort_duration: 7,
+            recovery_duration: 3,
+            variation: 1,
+        });
+
+        let bursts: Vec<_> = workout
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Microburst"))
+            .collect();
+        let floats: Vec<_> = workout
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Float"))
+            .collect();
+
+        assert!(!bursts.is_empty());
+        assert_eq!(bursts.len(), floats.len());
+        assert!(bursts.iter().all(|step| step.duration_secs == 40));
+        assert!(floats.iter().all(|step| step.duration_secs == 20));
+        assert!(bursts
+            .iter()
+            .all(|step| (110..=140).contains(&step.target_ftp_percent)));
+        assert!(floats
+            .iter()
+            .all(|step| (35..=85).contains(&step.target_ftp_percent)));
+    }
+
+    #[test]
+    fn microburst_workout_can_create_thirty_thirty_blocks() {
+        let workout = Workout::randomized(WorkoutParameters {
+            duration_minutes: 45,
+            workout_type: WorkoutType::Microbursts,
+            effort_intensity: 8,
+            recovery_intensity: 3,
+            effort_duration: 4,
+            recovery_duration: 5,
+            variation: 1,
+        });
+
+        let bursts: Vec<_> = workout
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Microburst"))
+            .collect();
+        let floats: Vec<_> = workout
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Float"))
+            .collect();
+
+        assert!(!bursts.is_empty());
+        assert_eq!(bursts.len(), floats.len());
+        assert!(bursts.iter().all(|step| step.duration_secs == 30));
+        assert!(floats.iter().all(|step| step.duration_secs == 30));
     }
 }

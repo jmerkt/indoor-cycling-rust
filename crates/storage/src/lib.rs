@@ -13,9 +13,24 @@ const RIDES_DIRECTORY: &str = "rides";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkoutBuilderConfiguration {
     pub length_minutes: i32,
-    pub difficulty: i32,
+    #[serde(default = "default_workout_type")]
+    pub workout_type: i32,
+    #[serde(alias = "difficulty", default = "default_builder_level")]
+    pub effort_intensity: i32,
+    #[serde(default = "default_builder_level")]
+    pub recovery_intensity: i32,
     pub effort_duration: i32,
+    #[serde(default = "default_builder_level")]
+    pub recovery_duration: i32,
     pub variation: i32,
+}
+
+fn default_builder_level() -> i32 {
+    2
+}
+
+fn default_workout_type() -> i32 {
+    3
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -710,13 +725,16 @@ mod tests {
         ));
         let store = ConfigurationStore::new(&path);
         let configuration = AppConfiguration {
-            version: 1,
+            version: 3,
             ftp_watts: 245,
             workout_builder: WorkoutBuilderConfiguration {
                 length_minutes: 60,
-                difficulty: 3,
-                effort_duration: 1,
-                variation: 4,
+                workout_type: 4,
+                effort_intensity: 9,
+                recovery_intensity: 6,
+                effort_duration: 4,
+                recovery_duration: 10,
+                variation: 9,
             },
             latest_workout: StoredWorkout {
                 name: "Hard Short Intervals".to_owned(),
@@ -734,6 +752,46 @@ mod tests {
 
         store.save(&configuration).unwrap();
         assert_eq!(store.load().unwrap(), Some(configuration));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_workout_builder_configuration_loads() {
+        let path = std::env::temp_dir().join(format!(
+            "indoor-cycling-legacy-settings-test-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let store = ConfigurationStore::new(&path);
+        fs::write(
+            &path,
+            r#"{
+  "version": 1,
+  "ftp_watts": 245,
+  "workout_builder": {
+    "length_minutes": 60,
+    "difficulty": 3,
+    "effort_duration": 1,
+    "variation": 4
+  },
+  "latest_workout": {
+    "name": "Hard Short Intervals",
+    "steps": []
+  },
+  "window": null
+}"#,
+        )
+        .unwrap();
+
+        let configuration = store.load().unwrap().unwrap();
+        assert_eq!(configuration.workout_builder.effort_intensity, 3);
+        assert_eq!(configuration.workout_builder.workout_type, 3);
+        assert_eq!(configuration.workout_builder.recovery_intensity, 2);
+        assert_eq!(configuration.workout_builder.effort_duration, 1);
+        assert_eq!(configuration.workout_builder.recovery_duration, 2);
         fs::remove_file(path).unwrap();
     }
 }

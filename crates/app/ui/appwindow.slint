@@ -76,13 +76,14 @@ component MenuButton inherits Rectangle {
     }
 }
 
-component ChoiceButton inherits Rectangle {
+component WorkoutTypeButton inherits Rectangle {
     in property <string> text;
     in property <bool> selected;
     callback clicked();
 
-    min-width: 104px;
-    min-height: 38px;
+    min-width: 116px;
+    min-height: 36px;
+    max-height: 36px;
     background: root.selected ? #0f766e : touch.has-hover ? #eef1f4 : white;
     border-color: root.selected ? #0f766e : #c7ced6;
     border-width: 1px;
@@ -91,13 +92,15 @@ component ChoiceButton inherits Rectangle {
     Text {
         text: root.text;
         color: root.selected ? white : #17202a;
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
 
-    touch := TouchArea { clicked => { root.clicked(); } }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
 }
 
 component FtpControl inherits Rectangle {
@@ -148,6 +151,53 @@ component FtpControl inherits Rectangle {
                 font-weight: 600;
                 vertical-alignment: center;
             }
+        }
+    }
+}
+
+component BuilderSliderRow inherits Rectangle {
+    in property <string> label;
+    in property <int> value;
+    in property <int> minimum-value: 1;
+    in property <int> maximum-value: 11;
+    in property <int> step-value: 1;
+    in property <string> suffix: " / 11";
+    callback changed(int);
+
+    min-height: 48px;
+    background: transparent;
+
+    HorizontalBox {
+        spacing: 12px;
+
+        Text {
+            text: root.label;
+            color: #334155;
+            font-size: 15px;
+            font-weight: 700;
+            min-width: 160px;
+            vertical-alignment: center;
+        }
+
+        Slider {
+            minimum: root.minimum-value;
+            maximum: root.maximum-value;
+            step: root.step-value;
+            value: root.value;
+            changed(value) => {
+                root.changed(round(value));
+            }
+            min-width: 300px;
+        }
+
+        Text {
+            text: root.value + root.suffix;
+            color: #0f766e;
+            font-size: 22px;
+            font-weight: 800;
+            min-width: 88px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
         }
     }
 }
@@ -592,14 +642,17 @@ export component AppWindow inherits Window {
     callback scan-devices();
     callback connect-device(string, int);
     callback disconnect-device(int);
-    callback randomize-workout(int, int, int, int);
-    callback builder-settings-changed(int, int, int, int);
+    callback randomize-workout(int, int, int, int, int, int, int);
+    callback builder-settings-changed(int, int, int, int, int, int, int);
 
     private property <int> current-page: 0;
     in-out property <int> draft-length-minutes: 45;
-    in-out property <int> draft-difficulty: 2;
-    in-out property <int> draft-effort-duration: 2;
-    in-out property <int> draft-variation: 2;
+    in-out property <int> draft-workout-type: 3;
+    in-out property <int> draft-effort-intensity: 6;
+    in-out property <int> draft-recovery-intensity: 6;
+    in-out property <int> draft-effort-duration: 6;
+    in-out property <int> draft-recovery-duration: 6;
+    in-out property <int> draft-variation: 6;
 
     background: #f7f8fa;
 
@@ -1084,85 +1137,81 @@ export component AppWindow inherits Window {
                         padding: 20px;
                         spacing: 16px;
 
-                        HorizontalBox {
-                            spacing: 18px;
-
-                            VerticalBox {
-                                spacing: 8px;
-                                Text { text: "Total length"; color: #334155; font-size: 15px; font-weight: 700; }
-                                HorizontalBox {
-                                    spacing: 12px;
-                                    Slider {
-                                        minimum: 15;
-                                        maximum: 180;
-                                        step: 5;
-                                        value: root.draft-length-minutes;
-                                        changed(value) => {
-                                            root.draft-length-minutes = round(value);
-                                            root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation);
-                                        }
-                                        min-width: 220px;
-                                    }
-                                    Text {
-                                        text: root.draft-length-minutes + " min";
-                                        color: #0f766e;
-                                        font-size: 22px;
-                                        font-weight: 800;
-                                        min-width: 80px;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                    }
-                                }
+                        VerticalBox {
+                            spacing: 8px;
+                            Text { text: "Workout type"; color: #334155; font-size: 15px; font-weight: 700; }
+                            HorizontalBox {
+                                spacing: 6px;
+                                WorkoutTypeButton { text: "Recovery"; selected: root.draft-workout-type == 0; clicked => { root.draft-workout-type = 0; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
+                                WorkoutTypeButton { text: "Endurance"; selected: root.draft-workout-type == 1; clicked => { root.draft-workout-type = 1; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
+                                WorkoutTypeButton { text: "Tempo"; selected: root.draft-workout-type == 2; clicked => { root.draft-workout-type = 2; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
+                                WorkoutTypeButton { text: "Sweet spot"; selected: root.draft-workout-type == 3; clicked => { root.draft-workout-type = 3; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
+                                WorkoutTypeButton { text: "Threshold"; selected: root.draft-workout-type == 4; clicked => { root.draft-workout-type = 4; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
                             }
-
-                            VerticalBox {
-                                spacing: 8px;
-                                Text { text: "Difficulty"; color: #334155; font-size: 15px; font-weight: 700; }
-                                HorizontalBox {
-                                    spacing: 6px;
-                                    ChoiceButton { text: "Gentle"; selected: root.draft-difficulty == 0; clicked => { root.draft-difficulty = 0; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                    ChoiceButton { text: "Easy"; selected: root.draft-difficulty == 1; clicked => { root.draft-difficulty = 1; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                    ChoiceButton { text: "Moderate"; selected: root.draft-difficulty == 2; clicked => { root.draft-difficulty = 2; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                    ChoiceButton { text: "Hard"; selected: root.draft-difficulty == 3; clicked => { root.draft-difficulty = 3; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                    ChoiceButton { text: "Very hard"; selected: root.draft-difficulty == 4; clicked => { root.draft-difficulty = 4; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                }
+                            HorizontalBox {
+                                spacing: 6px;
+                                WorkoutTypeButton { text: "Over-under"; selected: root.draft-workout-type == 5; clicked => { root.draft-workout-type = 5; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
+                                WorkoutTypeButton { text: "VO2 max"; selected: root.draft-workout-type == 6; clicked => { root.draft-workout-type = 6; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
+                                WorkoutTypeButton { text: "Sprinting"; selected: root.draft-workout-type == 7; clicked => { root.draft-workout-type = 7; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
+                                WorkoutTypeButton { text: "Microbursts"; selected: root.draft-workout-type == 8; clicked => { root.draft-workout-type = 8; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
                             }
                         }
 
-                        VerticalBox {
-                            spacing: 8px;
-                            Text { text: "Effort duration"; color: #334155; font-size: 15px; font-weight: 700; }
-                            HorizontalBox {
-                                spacing: 6px;
-                                ChoiceButton { text: "Very short"; selected: root.draft-effort-duration == 0; clicked => { root.draft-effort-duration = 0; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                ChoiceButton { text: "Short"; selected: root.draft-effort-duration == 1; clicked => { root.draft-effort-duration = 1; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                ChoiceButton { text: "Medium"; selected: root.draft-effort-duration == 2; clicked => { root.draft-effort-duration = 2; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                ChoiceButton { text: "Long"; selected: root.draft-effort-duration == 3; clicked => { root.draft-effort-duration = 3; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                ChoiceButton { text: "Very long"; selected: root.draft-effort-duration == 4; clicked => { root.draft-effort-duration = 4; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                            }
-                            Text {
-                                text: root.draft-effort-duration == 0
-                                    ? "Very short efforts are punchy, with easy recovery between every interval."
-                                    : root.draft-effort-duration == 1
-                                        ? "Short efforts alternate harder work with recovery."
-                                        : root.draft-effort-duration == 2
-                                            ? "Medium efforts balance steady work and recovery."
-                                            : "Long efforts focus on sustained work and muscular endurance.";
-                                color: #64748b;
-                                font-size: 13px;
+                        BuilderSliderRow {
+                            label: "Total length";
+                            value: root.draft-length-minutes;
+                            minimum-value: 15;
+                            maximum-value: 180;
+                            step-value: 5;
+                            suffix: " min";
+                            changed(value) => {
+                                root.draft-length-minutes = value;
+                                root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation);
                             }
                         }
 
-                        VerticalBox {
-                            spacing: 8px;
-                            Text { text: "Variation"; color: #334155; font-size: 15px; font-weight: 700; }
-                            HorizontalBox {
-                                spacing: 6px;
-                                ChoiceButton { text: "Minimal"; selected: root.draft-variation == 1; clicked => { root.draft-variation = 1; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                ChoiceButton { text: "Subtle"; selected: root.draft-variation == 2; clicked => { root.draft-variation = 2; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                ChoiceButton { text: "Varied"; selected: root.draft-variation == 3; clicked => { root.draft-variation = 3; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                ChoiceButton { text: "High"; selected: root.draft-variation == 4; clicked => { root.draft-variation = 4; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
-                                ChoiceButton { text: "Wild"; selected: root.draft-variation == 5; clicked => { root.draft-variation = 5; root.builder-settings-changed(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation); } }
+                        BuilderSliderRow {
+                            label: "Effort intensity";
+                            value: root.draft-effort-intensity;
+                            changed(value) => {
+                                root.draft-effort-intensity = value;
+                                root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation);
+                            }
+                        }
+
+                        BuilderSliderRow {
+                            label: "Recovery intensity";
+                            value: root.draft-recovery-intensity;
+                            changed(value) => {
+                                root.draft-recovery-intensity = value;
+                                root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation);
+                            }
+                        }
+
+                        BuilderSliderRow {
+                            label: "Effort duration";
+                            value: root.draft-effort-duration;
+                            changed(value) => {
+                                root.draft-effort-duration = value;
+                                root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation);
+                            }
+                        }
+
+                        BuilderSliderRow {
+                            label: "Recovery duration";
+                            value: root.draft-recovery-duration;
+                            changed(value) => {
+                                root.draft-recovery-duration = value;
+                                root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation);
+                            }
+                        }
+
+                        BuilderSliderRow {
+                            label: "Variation";
+                            value: root.draft-variation;
+                            changed(value) => {
+                                root.draft-variation = value;
+                                root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation);
                             }
                         }
 
@@ -1170,7 +1219,15 @@ export component AppWindow inherits Window {
                             text: "Randomize and activate workout";
                             max-width: 290px;
                             clicked => {
-                                root.randomize-workout(root.draft-length-minutes, root.draft-difficulty, root.draft-effort-duration, root.draft-variation);
+                                root.randomize-workout(
+                                    root.draft-length-minutes,
+                                    root.draft-workout-type,
+                                    root.draft-effort-intensity,
+                                    root.draft-recovery-intensity,
+                                    root.draft-effort-duration,
+                                    root.draft-recovery-duration,
+                                    root.draft-variation
+                                );
                             }
                         }
                     }
