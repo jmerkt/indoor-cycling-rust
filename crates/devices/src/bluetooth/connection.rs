@@ -90,25 +90,18 @@ impl DeviceConnection {
             }
             self.set_erg_target_power(target_power_watts).await
         } else {
-            if let Err(reset_error) = self
-                .write_control_command(&fitness_machine::reset_command())
+            if !self.control_acquired {
+                return Ok(());
+            }
+            if let Err(stop_error) = self
+                .write_control_command(&fitness_machine::stop_command())
                 .await
             {
-                // Reset is the FTMS-defined way to clear target power. Some
-                // trainers reject it while their training session is active, so
-                // stop that session and retry the reset before reporting failure.
-                self.write_control_command(&fitness_machine::stop_command())
-                    .await
-                    .map_err(|stop_error| {
-                        DeviceError::ControlFailed(format!(
-                            "could not reset ERG mode ({reset_error}); stop fallback failed ({stop_error})"
-                        ))
-                    })?;
                 self.write_control_command(&fitness_machine::reset_command())
                     .await
-                    .map_err(|retry_error| {
+                    .map_err(|reset_error| {
                         DeviceError::ControlFailed(format!(
-                            "could not reset ERG mode ({reset_error}); reset retry failed ({retry_error})"
+                            "could not stop ERG mode ({stop_error}); reset fallback failed ({reset_error})"
                         ))
                     })?;
             }
