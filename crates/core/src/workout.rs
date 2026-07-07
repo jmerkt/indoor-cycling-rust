@@ -74,8 +74,12 @@ impl Workout {
                     block_secs: [180, 240, 300, 360, 420, 480, 600, 720, 900, 1050, 1200],
                     target_low: 40,
                     target_high: 55,
+                    target_floor: 30,
+                    target_ceiling: 70,
                     relief_target_low: 35,
                     relief_target_high: 45,
+                    relief_target_floor: 25,
+                    relief_target_ceiling: 60,
                 },
             ),
             WorkoutType::Endurance => build_steady_session(
@@ -89,8 +93,12 @@ impl Workout {
                     block_secs: [300, 420, 600, 720, 900, 1050, 1200, 1500, 1800, 2100, 2400],
                     target_low: 58,
                     target_high: 75,
+                    target_floor: 45,
+                    target_ceiling: 90,
                     relief_target_low: 45,
                     relief_target_high: 60,
+                    relief_target_floor: 30,
+                    relief_target_ceiling: 75,
                 },
             ),
             WorkoutType::Tempo => build_interval_session(
@@ -259,9 +267,11 @@ impl WorkoutType {
 pub struct WorkoutParameters {
     pub duration_minutes: u16,
     pub workout_type: WorkoutType,
-    /// Effort target level from 1 to 11.
+    /// Effort target level from 1 to 11. Levels 1-2 and 10-11 can cross
+    /// the normal workout-type boundaries.
     pub effort_intensity: u8,
-    /// Recovery target level from 1 to 11.
+    /// Recovery target level from 1 to 11. Levels 1-2 and 10-11 can cross
+    /// the normal workout-type boundaries.
     pub recovery_intensity: u8,
     /// Effort block duration level from 1 to 11.
     pub effort_duration: u8,
@@ -293,9 +303,23 @@ fn level_index(level: u8) -> u8 {
     level.clamp(1, 11) - 1
 }
 
-fn level_to_percent(level: u8, low: u16, high: u16) -> u16 {
+fn level_to_percent_with_edges(level: u8, low: u16, high: u16, floor: u16, ceiling: u16) -> u16 {
+    let index = level_index(level);
+    if index <= 2 {
+        interpolate_percent(index, 2, floor, low)
+    } else if index <= 8 {
+        interpolate_percent(index - 2, 6, low, high)
+    } else {
+        interpolate_percent(index - 8, 2, high, ceiling)
+    }
+}
+
+fn interpolate_percent(index: u8, max_index: u8, low: u16, high: u16) -> u16 {
+    if max_index == 0 {
+        return low;
+    }
     let span = high.saturating_sub(low);
-    low + (span * u16::from(level_index(level)) + 5) / 10
+    low + (span * u16::from(index) + u16::from(max_index) / 2) / u16::from(max_index)
 }
 
 fn duration_jitter_radius(base_secs: u16, variation: u8) -> u16 {
@@ -320,8 +344,12 @@ struct SteadySpec {
     block_secs: [u16; 11],
     target_low: u16,
     target_high: u16,
+    target_floor: u16,
+    target_ceiling: u16,
     relief_target_low: u16,
     relief_target_high: u16,
+    relief_target_floor: u16,
+    relief_target_ceiling: u16,
 }
 
 fn build_steady_session(
@@ -332,15 +360,19 @@ fn build_steady_session(
     spec: SteadySpec,
 ) {
     let base_block_secs = duration_level_secs(parameters.effort_duration, &spec.block_secs);
-    let target = level_to_percent(
+    let target = level_to_percent_with_edges(
         parameters.effort_intensity,
         spec.target_low,
         spec.target_high,
+        spec.target_floor,
+        spec.target_ceiling,
     );
-    let relief_target = level_to_percent(
+    let relief_target = level_to_percent_with_edges(
         parameters.recovery_intensity,
         spec.relief_target_low,
         spec.relief_target_high,
+        spec.relief_target_floor,
+        spec.relief_target_ceiling,
     );
     let relief_secs = duration_level_secs(
         parameters.recovery_duration,
@@ -353,7 +385,7 @@ fn build_steady_session(
             jitter_duration(random, base_block_secs, parameters.variation, 60, remaining);
         let percent = random
             .jitter(target, power_jitter_radius(parameters.variation, 1))
-            .clamp(spec.target_low, spec.target_high);
+            .clamp(spec.target_floor, spec.target_ceiling);
         steps.push(WorkoutStep::new(
             format!("{} {block}", spec.block_name),
             duration,
@@ -367,7 +399,7 @@ fn build_steady_session(
                     jitter_duration(random, relief_secs, parameters.variation, 60, remaining);
                 let relief_percent = random
                     .jitter(relief_target, power_jitter_radius(parameters.variation, 1))
-                    .clamp(spec.relief_target_low, spec.relief_target_high);
+                    .clamp(spec.relief_target_floor, spec.relief_target_ceiling);
                 steps.push(WorkoutStep::new(
                     format!("{relief_name} {block}"),
                     relief_duration,
@@ -390,8 +422,12 @@ struct IntervalSpec {
     recovery_secs: [u16; 11],
     effort_low: u16,
     effort_high: u16,
+    effort_floor: u16,
+    effort_ceiling: u16,
     recovery_low: u16,
     recovery_high: u16,
+    recovery_floor: u16,
+    recovery_ceiling: u16,
     min_effort_secs: u16,
     max_effort_secs: u16,
     efforts_per_set: u16,
@@ -409,8 +445,12 @@ impl IntervalSpec {
             recovery_secs: [60, 90, 120, 150, 180, 240, 300, 360, 420, 480, 600],
             effort_low: 76,
             effort_high: 90,
+            effort_floor: 65,
+            effort_ceiling: 100,
             recovery_low: 45,
             recovery_high: 65,
+            recovery_floor: 30,
+            recovery_ceiling: 80,
             min_effort_secs: 120,
             max_effort_secs: 1500,
             efforts_per_set: 3,
@@ -428,8 +468,12 @@ impl IntervalSpec {
             recovery_secs: [60, 90, 120, 150, 180, 240, 300, 360, 420, 480, 600],
             effort_low: 88,
             effort_high: 94,
+            effort_floor: 78,
+            effort_ceiling: 104,
             recovery_low: 40,
             recovery_high: 60,
+            recovery_floor: 30,
+            recovery_ceiling: 75,
             min_effort_secs: 180,
             max_effort_secs: 1800,
             efforts_per_set: 2,
@@ -447,8 +491,12 @@ impl IntervalSpec {
             recovery_secs: [120, 150, 180, 210, 240, 300, 360, 420, 480, 600, 720],
             effort_low: 95,
             effort_high: 105,
+            effort_floor: 85,
+            effort_ceiling: 115,
             recovery_low: 40,
             recovery_high: 60,
+            recovery_floor: 30,
+            recovery_ceiling: 75,
             min_effort_secs: 180,
             max_effort_secs: 1200,
             efforts_per_set: 2,
@@ -466,8 +514,12 @@ impl IntervalSpec {
             recovery_secs: [60, 75, 90, 120, 150, 180, 210, 240, 270, 300, 360],
             effort_low: 106,
             effort_high: 120,
+            effort_floor: 95,
+            effort_ceiling: 135,
             recovery_low: 35,
             recovery_high: 55,
+            recovery_floor: 25,
+            recovery_ceiling: 70,
             min_effort_secs: 45,
             max_effort_secs: 360,
             efforts_per_set: 4,
@@ -485,8 +537,12 @@ impl IntervalSpec {
             recovery_secs: [90, 120, 150, 180, 210, 240, 300, 360, 420, 480, 600],
             effort_low: 125,
             effort_high: 170,
+            effort_floor: 105,
+            effort_ceiling: 200,
             recovery_low: 30,
             recovery_high: 50,
+            recovery_floor: 20,
+            recovery_ceiling: 65,
             min_effort_secs: 10,
             max_effort_secs: 90,
             efforts_per_set: 5,
@@ -505,15 +561,19 @@ fn build_interval_session(
 ) {
     let base_effort_secs = duration_level_secs(parameters.effort_duration, &spec.effort_secs);
     let base_recovery_secs = duration_level_secs(parameters.recovery_duration, &spec.recovery_secs);
-    let effort_target = level_to_percent(
+    let effort_target = level_to_percent_with_edges(
         parameters.effort_intensity,
         spec.effort_low,
         spec.effort_high,
+        spec.effort_floor,
+        spec.effort_ceiling,
     );
-    let recovery_target = level_to_percent(
+    let recovery_target = level_to_percent_with_edges(
         parameters.recovery_intensity,
         spec.recovery_low,
         spec.recovery_high,
+        spec.recovery_floor,
+        spec.recovery_ceiling,
     );
     let mut interval = 1;
     let mut set = 1;
@@ -540,7 +600,7 @@ fn build_interval_session(
                 effort_target,
                 power_jitter_radius(parameters.variation, spec.power_jitter_multiplier),
             )
-            .clamp(spec.effort_low, spec.effort_high);
+            .clamp(spec.effort_floor, spec.effort_ceiling);
         steps.push(WorkoutStep::new(
             format!("{} {interval}", spec.effort_name),
             effort_duration,
@@ -566,7 +626,7 @@ fn build_interval_session(
                 recovery_target,
                 power_jitter_radius(parameters.variation, 1),
             )
-            .clamp(spec.recovery_low, spec.recovery_high);
+            .clamp(spec.recovery_floor, spec.recovery_ceiling);
         steps.push(WorkoutStep::new(
             if is_set_recovery {
                 format!("Set Recovery {set}")
@@ -603,9 +663,10 @@ fn build_over_under_session(
         parameters.recovery_duration,
         &[90, 120, 150, 180, 210, 240, 300, 360, 420, 480, 600],
     );
-    let under_target = level_to_percent(parameters.effort_intensity, 88, 96);
-    let over_target = level_to_percent(parameters.effort_intensity, 102, 112);
-    let recovery_target = level_to_percent(parameters.recovery_intensity, 40, 60);
+    let under_target = level_to_percent_with_edges(parameters.effort_intensity, 88, 96, 75, 102);
+    let over_target = level_to_percent_with_edges(parameters.effort_intensity, 102, 112, 96, 125);
+    let recovery_target =
+        level_to_percent_with_edges(parameters.recovery_intensity, 40, 60, 25, 75);
     let repeats_per_set = match parameters.effort_duration {
         1..=3 => 6,
         4..=7 => 5,
@@ -627,7 +688,7 @@ fn build_over_under_session(
             );
             let under_percent = random
                 .jitter(under_target, power_jitter_radius(parameters.variation, 1))
-                .clamp(88, 96);
+                .clamp(75, 102);
             steps.push(WorkoutStep::new(
                 format!("Under {set}.{repeat}"),
                 under_duration,
@@ -643,7 +704,7 @@ fn build_over_under_session(
                 jitter_duration(random, over_secs, parameters.variation, 30, remaining);
             let over_percent = random
                 .jitter(over_target, power_jitter_radius(parameters.variation, 1))
-                .clamp(102, 112);
+                .clamp(96, 125);
             steps.push(WorkoutStep::new(
                 format!("Over {set}.{repeat}"),
                 over_duration,
@@ -663,7 +724,7 @@ fn build_over_under_session(
                 recovery_target,
                 power_jitter_radius(parameters.variation, 1),
             )
-            .clamp(40, 60);
+            .clamp(25, 75);
         steps.push(WorkoutStep::new(
             format!("Set Recovery {set}"),
             recovery_duration,
@@ -694,9 +755,10 @@ fn build_microburst_session(
         parameters.recovery_duration,
         &[120, 150, 180, 210, 240, 300, 360, 420, 480, 540, 600],
     );
-    let effort_target = level_to_percent(parameters.effort_intensity, 110, 140);
-    let float_target = level_to_percent(parameters.recovery_intensity, 35, 85);
-    let set_recovery_target = level_to_percent(parameters.recovery_intensity, 35, 60);
+    let effort_target = level_to_percent_with_edges(parameters.effort_intensity, 110, 140, 95, 160);
+    let float_target = level_to_percent_with_edges(parameters.recovery_intensity, 35, 85, 25, 100);
+    let set_recovery_target =
+        level_to_percent_with_edges(parameters.recovery_intensity, 35, 60, 25, 75);
     let min_cycle_secs = u64::from(effort_secs + float_secs);
     let base_repeats_per_set = (480 / (effort_secs + float_secs)).clamp(4, 14);
     let repeat_radius = u16::from(level_index(parameters.variation)) / 5;
@@ -721,7 +783,7 @@ fn build_microburst_session(
             );
             let effort_percent = random
                 .jitter(effort_target, power_jitter_radius(parameters.variation, 2))
-                .clamp(110, 140);
+                .clamp(95, 160);
             steps.push(WorkoutStep::new(
                 format!("Microburst {set}.{repeat}"),
                 effort_duration,
@@ -737,7 +799,7 @@ fn build_microburst_session(
                 jitter_short_duration(random, float_secs, parameters.variation, 10, remaining);
             let float_percent = random
                 .jitter(float_target, power_jitter_radius(parameters.variation, 1))
-                .clamp(35, 85);
+                .clamp(25, 100);
             steps.push(WorkoutStep::new(
                 format!("Float {set}.{repeat}"),
                 float_duration,
@@ -762,7 +824,7 @@ fn build_microburst_session(
                 set_recovery_target,
                 power_jitter_radius(parameters.variation, 1),
             )
-            .clamp(35, 60);
+            .clamp(25, 75);
         steps.push(WorkoutStep::new(
             format!("Set Recovery {set}"),
             recovery_duration,
@@ -1056,7 +1118,7 @@ mod tests {
         let workout = Workout::randomized(WorkoutParameters {
             duration_minutes: 45,
             workout_type: WorkoutType::SweetSpot,
-            effort_intensity: 11,
+            effort_intensity: 6,
             recovery_intensity: 6,
             effort_duration: 7,
             recovery_duration: 6,
@@ -1103,7 +1165,7 @@ mod tests {
         let workout = Workout::randomized(WorkoutParameters {
             duration_minutes: 45,
             workout_type: WorkoutType::Vo2Max,
-            effort_intensity: 11,
+            effort_intensity: 6,
             recovery_intensity: 6,
             effort_duration: 11,
             recovery_duration: 6,
@@ -1149,8 +1211,8 @@ mod tests {
         let workout = Workout::randomized(WorkoutParameters {
             duration_minutes: 45,
             workout_type: WorkoutType::Recovery,
-            effort_intensity: 11,
-            recovery_intensity: 11,
+            effort_intensity: 6,
+            recovery_intensity: 6,
             effort_duration: 6,
             recovery_duration: 6,
             variation: 11,
@@ -1161,6 +1223,65 @@ mod tests {
             .iter()
             .filter(|step| !matches!(step.name.as_str(), "Warmup" | "Cooldown"))
             .all(|step| step.target_ftp_percent <= 55));
+    }
+
+    #[test]
+    fn intensity_slider_extremes_can_cross_category_edges() {
+        let very_hard = Workout::randomized(WorkoutParameters {
+            duration_minutes: 45,
+            workout_type: WorkoutType::SweetSpot,
+            effort_intensity: 11,
+            recovery_intensity: 11,
+            effort_duration: 6,
+            recovery_duration: 6,
+            variation: 1,
+        });
+        let sweet_spot_efforts: Vec<_> = very_hard
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Sweet Spot"))
+            .collect();
+        let hard_recoveries: Vec<_> = very_hard
+            .steps
+            .iter()
+            .filter(|step| step.name.contains("Recovery"))
+            .collect();
+
+        assert!(!sweet_spot_efforts.is_empty());
+        assert!(!hard_recoveries.is_empty());
+        assert!(sweet_spot_efforts
+            .iter()
+            .all(|step| step.target_ftp_percent > 94));
+        assert!(hard_recoveries
+            .iter()
+            .all(|step| step.target_ftp_percent > 60));
+
+        let very_easy = Workout::randomized(WorkoutParameters {
+            duration_minutes: 45,
+            workout_type: WorkoutType::SweetSpot,
+            effort_intensity: 1,
+            recovery_intensity: 1,
+            effort_duration: 6,
+            recovery_duration: 6,
+            variation: 1,
+        });
+        let easy_efforts: Vec<_> = very_easy
+            .steps
+            .iter()
+            .filter(|step| step.name.starts_with("Sweet Spot"))
+            .collect();
+        let easy_recoveries: Vec<_> = very_easy
+            .steps
+            .iter()
+            .filter(|step| step.name.contains("Recovery"))
+            .collect();
+
+        assert!(!easy_efforts.is_empty());
+        assert!(!easy_recoveries.is_empty());
+        assert!(easy_efforts.iter().all(|step| step.target_ftp_percent < 88));
+        assert!(easy_recoveries
+            .iter()
+            .all(|step| step.target_ftp_percent < 40));
     }
 
     #[test]
@@ -1256,7 +1377,7 @@ mod tests {
             .all(|step| (110..=140).contains(&step.target_ftp_percent)));
         assert!(floats
             .iter()
-            .all(|step| (35..=85).contains(&step.target_ftp_percent)));
+            .all(|step| (25..=100).contains(&step.target_ftp_percent)));
     }
 
     #[test]
