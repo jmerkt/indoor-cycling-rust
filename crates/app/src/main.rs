@@ -122,6 +122,14 @@ impl AppState {
         self.running = false;
         self.finish_dialog_resume_running = false;
     }
+
+    fn replace_workout(&mut self, workout: Workout) {
+        let was_running = self.running;
+        self.workout = WorkoutEngine::new(workout);
+        if was_running {
+            self.workout.start();
+        }
+    }
 }
 
 fn main() -> Result<(), slint::PlatformError> {
@@ -291,15 +299,24 @@ fn main() -> Result<(), slint::PlatformError> {
                     variation: workout_level(builder.variation),
                 };
                 let mut state = state.borrow_mut();
-                state.running = false;
-                state.recorder = RideRecorder::new();
+                let was_running = state.running;
+                let has_recording = !state.recorder.samples().is_empty();
                 state.workout_builder = builder;
-                state.workout = WorkoutEngine::new(Workout::randomized(parameters));
+                state.replace_workout(Workout::randomized(parameters));
                 apply_current_target(&mut state);
                 sync_erg_target(&mut state, bluetooth_service.as_deref());
                 persist_configuration(configuration_store.as_ref(), &state);
                 if let Some(window) = window_weak.upgrade() {
-                    window.set_ride_status("Ready".into());
+                    window.set_ride_status(
+                        if was_running {
+                            "Riding"
+                        } else if has_recording {
+                            "Paused"
+                        } else {
+                            "Ready"
+                        }
+                        .into(),
+                    );
                     render(&window, &state);
                 }
             },
@@ -1045,13 +1062,9 @@ fn render(window: &AppWindow, state: &AppState) {
 }
 
 fn apply_current_target(state: &mut AppState) {
-    let WorkoutPhase::Active { step, .. } = state.workout.phase() else {
-        return;
-    };
-
-    let _ = state
-        .trainer
-        .set_target_power(step.target_power_watts(state.ftp_watts));
+    if let Some(target_power_watts) = current_target_power(state) {
+        let _ = state.trainer.set_target_power(target_power_watts);
+    }
 }
 
 fn current_target_power(state: &AppState) -> Option<u16> {
@@ -1331,5 +1344,50 @@ fn persist_configuration(store: Option<&ConfigurationStore>, state: &AppState) {
 
     if let Err(error) = store.save(&state.configuration()) {
         eprintln!("Could not save application settings: {error}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indoor_cycling_core::{RideSample, WorkoutStep};
+
+    #[test]
+    fn replacing_workout_preserves_running_recording() {
+        let sample = RideSample::new(1, 180, 88, Some(125));
+        let mut state = AppState::new(None);
+        state.recorder.push(sample.clone());
+        state.running = true;
+        state.workout.start();
+
+        state.replace_workout(Workout::new(
+            "Replacement",
+            vec![WorkoutStep::new("New Effort", 60, 115)],
+        ));
+
+        assert_eq!(state.recorder.samples(), &[sample]);
+        assert!(state.running);
+        assert_eq!(state.workout.workout().name, "Replacement");
+        assert!(matches!(
+            state.workout.tick(),
+            WorkoutPhase::Active { step, .. } if step.name == "New Effort"
+        ));
+    }
+
+    #[test]
+    fn replacing_workout_preserves_paused_recording() {
+        let sample = RideSample::new(1, 160, 84, None);
+        let mut state = AppState::new(None);
+        state.recorder.push(sample.clone());
+        state.running = false;
+
+        state.replace_workout(Workout::new(
+            "Paused Replacement",
+            vec![WorkoutStep::new("New Warmup", 60, 55)],
+        ));
+
+        assert_eq!(state.recorder.samples(), &[sample]);
+        assert!(!state.running);
+        assert_eq!(state.workout.phase(), WorkoutPhase::NotStarted);
     }
 }
