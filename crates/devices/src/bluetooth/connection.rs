@@ -93,19 +93,28 @@ impl DeviceConnection {
             if !self.control_acquired {
                 return Ok(());
             }
-            if let Err(stop_error) = self
-                .write_control_command(&fitness_machine::stop_command())
+            // Leave target-power mode by selecting the trainer's zero-resistance mode.
+            // Several FTMS trainers accept Stop/Reset without actually clearing ERG.
+            if let Err(resistance_error) = self
+                .write_control_command(&fitness_machine::set_target_resistance_level_command(0))
                 .await
             {
-                self.write_control_command(&fitness_machine::reset_command())
+                if let Err(stop_error) = self
+                    .write_control_command(&fitness_machine::stop_command())
                     .await
-                    .map_err(|reset_error| {
-                        DeviceError::ControlFailed(format!(
-                            "could not stop ERG mode ({stop_error}); reset fallback failed ({reset_error})"
-                        ))
-                    })?;
+                {
+                    self.write_control_command(&fitness_machine::reset_command())
+                        .await
+                        .map_err(|reset_error| {
+                            DeviceError::ControlFailed(format!(
+                                "could not leave ERG mode with resistance target ({resistance_error}); stop failed ({stop_error}); reset fallback failed ({reset_error})"
+                            ))
+                        })?;
+                    self.control_acquired = false;
+                } else {
+                    self.control_acquired = false;
+                }
             }
-            self.control_acquired = false;
             Ok(())
         }
     }

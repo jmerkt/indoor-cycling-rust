@@ -2,6 +2,7 @@ use crate::DeviceError;
 
 pub const REQUEST_CONTROL_OPCODE: u8 = 0x00;
 pub const RESET_OPCODE: u8 = 0x01;
+pub const SET_TARGET_RESISTANCE_LEVEL_OPCODE: u8 = 0x04;
 pub const SET_TARGET_POWER_OPCODE: u8 = 0x05;
 pub const STOP_OR_PAUSE_OPCODE: u8 = 0x08;
 pub const STOP_CONTROL_INFORMATION: u8 = 0x01;
@@ -62,6 +63,15 @@ pub fn reset_command() -> [u8; 1] {
 pub fn set_target_power_command(watts: u16) -> [u8; 3] {
     let watts = i16::try_from(watts).unwrap_or(i16::MAX).to_le_bytes();
     [SET_TARGET_POWER_OPCODE, watts[0], watts[1]]
+}
+
+pub fn set_target_resistance_level_command(resistance: i16) -> [u8; 3] {
+    let resistance = resistance.to_le_bytes();
+    [
+        SET_TARGET_RESISTANCE_LEVEL_OPCODE,
+        resistance[0],
+        resistance[1],
+    ]
 }
 
 pub fn stop_command() -> [u8; 2] {
@@ -149,6 +159,12 @@ mod tests {
     #[test]
     fn builds_target_power_command() {
         assert_eq!(set_target_power_command(250), [0x05, 0xfa, 0x00]);
+    }
+
+    #[test]
+    fn builds_target_resistance_level_command() {
+        assert_eq!(set_target_resistance_level_command(0), [0x04, 0x00, 0x00]);
+        assert_eq!(set_target_resistance_level_command(100), [0x04, 0x64, 0x00]);
     }
 
     #[test]
