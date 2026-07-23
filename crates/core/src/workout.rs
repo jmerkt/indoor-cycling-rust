@@ -41,7 +41,7 @@ impl Workout {
                 WorkoutStep::new("Warmup", 300, 50),
                 WorkoutStep::new("Steady", 900, 70),
                 WorkoutStep::new("Tempo", 300, 85),
-                WorkoutStep::new("Cooldown", 300, 45),
+                WorkoutStep::new("Cooldown", 240, 50),
             ],
         )
     }
@@ -237,8 +237,8 @@ impl WorkoutType {
 
     fn cooldown_secs(self, total_secs: u64) -> u64 {
         match self {
-            Self::Recovery | Self::Endurance => (total_secs / 12).clamp(180, 420),
-            _ => (total_secs / 8).clamp(300, 600),
+            Self::Recovery | Self::Endurance => (total_secs / 15).clamp(120, 300),
+            _ => (total_secs / 12).clamp(180, 420),
         }
     }
 
@@ -257,8 +257,9 @@ impl WorkoutType {
 
     fn cooldown_target(self) -> u16 {
         match self {
-            Self::Recovery => 38,
-            _ => 45,
+            Self::Recovery => 45,
+            Self::Endurance => 50,
+            _ => 55,
         }
     }
 }
@@ -1137,6 +1138,40 @@ mod tests {
             .iter()
             .filter(|step| step.name.starts_with("Sweet Spot"))
             .all(|step| (88..=94).contains(&step.target_ftp_percent)));
+    }
+
+    #[test]
+    fn cooldowns_are_shorter_and_keep_meaningful_power() {
+        for (workout_type, expected_duration, target_range) in [
+            (WorkoutType::Recovery, 240, 40..=50),
+            (WorkoutType::Endurance, 240, 45..=55),
+            (WorkoutType::Tempo, 300, 50..=60),
+            (WorkoutType::SweetSpot, 300, 50..=60),
+            (WorkoutType::Threshold, 300, 50..=60),
+            (WorkoutType::OverUnder, 300, 50..=60),
+            (WorkoutType::Vo2Max, 300, 50..=60),
+            (WorkoutType::Sprinting, 300, 50..=60),
+            (WorkoutType::Microbursts, 300, 50..=60),
+        ] {
+            let workout = Workout::randomized(WorkoutParameters {
+                duration_minutes: 60,
+                workout_type,
+                effort_intensity: 6,
+                recovery_intensity: 6,
+                effort_duration: 6,
+                recovery_duration: 6,
+                variation: 11,
+            });
+            let cooldown = workout.steps.last().unwrap();
+
+            assert_eq!(cooldown.name, "Cooldown");
+            assert_eq!(cooldown.duration_secs, expected_duration);
+            assert!(
+                target_range.contains(&cooldown.target_ftp_percent),
+                "{workout_type:?} cooldown was {}% FTP",
+                cooldown.target_ftp_percent
+            );
+        }
     }
 
     #[test]

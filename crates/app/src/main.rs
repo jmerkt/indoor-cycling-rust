@@ -573,7 +573,13 @@ fn main() -> Result<(), slint::PlatformError> {
                 };
 
                 while let Ok(event) = service.try_recv() {
-                    handle_discovery_event(&window, &event_devices_model, &state, event);
+                    handle_discovery_event(
+                        &window,
+                        &event_devices_model,
+                        &state,
+                        service.as_ref(),
+                        event,
+                    );
                 }
             },
         );
@@ -586,6 +592,7 @@ fn handle_discovery_event(
     window: &AppWindow,
     devices: &Rc<VecModel<DeviceListItem>>,
     state: &Rc<RefCell<AppState>>,
+    bluetooth_service: &BluetoothDeviceService,
     event: DiscoveryEvent,
 ) {
     match event {
@@ -669,6 +676,7 @@ fn handle_discovery_event(
             state.erg_command_pending = false;
             state.erg_target_watts = target_power_watts;
             state.erg_error = None;
+            sync_erg_target(&mut state, Some(bluetooth_service));
             render(window, &state);
         }
         DiscoveryEvent::TrainerControlError(message) => {
@@ -1389,5 +1397,24 @@ mod tests {
         assert_eq!(state.recorder.samples(), &[sample]);
         assert!(!state.running);
         assert_eq!(state.workout.phase(), WorkoutPhase::NotStarted);
+    }
+
+    #[test]
+    fn changing_ftp_rescales_an_active_workout_target() {
+        let mut state = AppState::new(None);
+        state.replace_workout(Workout::new(
+            "FTP Scaling",
+            vec![WorkoutStep::new("Effort", 60, 120)],
+        ));
+        state.running = true;
+        state.workout.start();
+
+        assert_eq!(current_target_power(&state), Some(240));
+
+        state.ftp_watts = 250;
+        apply_current_target(&mut state);
+
+        assert_eq!(current_target_power(&state), Some(300));
+        assert!(state.running);
     }
 }

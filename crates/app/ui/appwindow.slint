@@ -103,12 +103,53 @@ component WorkoutTypeButton inherits Rectangle {
     }
 }
 
+component FtpStepButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    min-width: 40px;
+    max-width: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    opacity: root.enabled ? 1 : 0.45;
+    background: touch.pressed && root.enabled ? #d8dde3 : touch.has-hover && root.enabled ? #eef1f4 : white;
+    border-color: #aeb8c2;
+    border-width: 1px;
+    border-radius: 5px;
+
+    Text {
+        text: root.text;
+        color: #17202a;
+        font-size: 22px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
 component FtpControl inherits Rectangle {
     in property <int> value;
+    in property <int> step-value: 5;
     callback changed(int);
 
-    min-width: 160px;
-    max-width: 160px;
+    changed value => {
+        ftp-input.text = root.value + "";
+    }
+
+    function apply-value(value: int) {
+        let bounded-value = max(50, min(600, value));
+        ftp-input.text = bounded-value + "";
+        root.changed(bounded-value);
+    }
+
+    min-width: 220px;
+    max-width: 220px;
     min-height: 116px;
     max-height: 116px;
     background: white;
@@ -128,19 +169,29 @@ component FtpControl inherits Rectangle {
         }
 
         HorizontalBox {
-            spacing: 4px;
+            spacing: 6px;
 
-            TextInput {
+            FtpStepButton {
+                text: "-";
+                enabled: root.value > 50;
+                clicked => { root.apply-value(root.value - root.step-value); }
+            }
+
+            ftp-input := TextInput {
                 text: root.value + "";
                 font-size: 26px;
                 font-weight: 800;
                 color: #17202a;
                 horizontal-alignment: right;
                 vertical-alignment: center;
+                min-width: 70px;
                 accepted => {
                     if self.text.is-float() {
-                        root.changed(max(50., min(600., self.text.to-float())));
+                        root.apply-value(round(self.text.to-float()));
+                    } else {
+                        self.text = root.value + "";
                     }
+                    self.clear-focus();
                 }
             }
 
@@ -150,6 +201,12 @@ component FtpControl inherits Rectangle {
                 font-size: 15px;
                 font-weight: 600;
                 vertical-alignment: center;
+            }
+
+            FtpStepButton {
+                text: "+";
+                enabled: root.value < 600;
+                clicked => { root.apply-value(root.value + root.step-value); }
             }
         }
     }
@@ -713,7 +770,7 @@ export component AppWindow inherits Window {
                 spacing: 18px;
 
                 dashboard-header := HorizontalBox {
-                    min-width: 1244px;
+                    min-width: 1304px;
                     min-height: 116px;
                     max-height: 116px;
                     spacing: 0px;
@@ -787,8 +844,8 @@ export component AppWindow inherits Window {
                     DashboardDivider { }
 
                     HorizontalBox {
-                        min-width: 352px;
-                        max-width: 352px;
+                        min-width: 412px;
+                        max-width: 412px;
                         spacing: 12px;
 
                         FtpControl {
