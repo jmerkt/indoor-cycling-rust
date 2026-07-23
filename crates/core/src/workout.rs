@@ -76,9 +76,9 @@ impl Workout {
                     target_high: 55,
                     target_floor: 30,
                     target_ceiling: 70,
-                    relief_target_low: 35,
+                    relief_target_low: 45,
                     relief_target_high: 45,
-                    relief_target_floor: 25,
+                    relief_target_floor: 40,
                     relief_target_ceiling: 60,
                 },
             ),
@@ -97,7 +97,7 @@ impl Workout {
                     target_ceiling: 90,
                     relief_target_low: 45,
                     relief_target_high: 60,
-                    relief_target_floor: 30,
+                    relief_target_floor: 40,
                     relief_target_ceiling: 75,
                 },
             ),
@@ -449,7 +449,7 @@ impl IntervalSpec {
             effort_ceiling: 100,
             recovery_low: 45,
             recovery_high: 65,
-            recovery_floor: 30,
+            recovery_floor: 40,
             recovery_ceiling: 80,
             min_effort_secs: 120,
             max_effort_secs: 1500,
@@ -470,9 +470,9 @@ impl IntervalSpec {
             effort_high: 94,
             effort_floor: 78,
             effort_ceiling: 104,
-            recovery_low: 40,
+            recovery_low: 45,
             recovery_high: 60,
-            recovery_floor: 30,
+            recovery_floor: 40,
             recovery_ceiling: 75,
             min_effort_secs: 180,
             max_effort_secs: 1800,
@@ -493,9 +493,9 @@ impl IntervalSpec {
             effort_high: 105,
             effort_floor: 85,
             effort_ceiling: 115,
-            recovery_low: 40,
+            recovery_low: 45,
             recovery_high: 60,
-            recovery_floor: 30,
+            recovery_floor: 40,
             recovery_ceiling: 75,
             min_effort_secs: 180,
             max_effort_secs: 1200,
@@ -516,10 +516,10 @@ impl IntervalSpec {
             effort_high: 120,
             effort_floor: 95,
             effort_ceiling: 135,
-            recovery_low: 35,
-            recovery_high: 55,
-            recovery_floor: 25,
-            recovery_ceiling: 70,
+            recovery_low: 45,
+            recovery_high: 65,
+            recovery_floor: 40,
+            recovery_ceiling: 90,
             min_effort_secs: 45,
             max_effort_secs: 360,
             efforts_per_set: 4,
@@ -539,10 +539,10 @@ impl IntervalSpec {
             effort_high: 170,
             effort_floor: 105,
             effort_ceiling: 200,
-            recovery_low: 30,
-            recovery_high: 50,
-            recovery_floor: 20,
-            recovery_ceiling: 65,
+            recovery_low: 45,
+            recovery_high: 65,
+            recovery_floor: 40,
+            recovery_ceiling: 90,
             min_effort_secs: 10,
             max_effort_secs: 90,
             efforts_per_set: 5,
@@ -666,7 +666,7 @@ fn build_over_under_session(
     let under_target = level_to_percent_with_edges(parameters.effort_intensity, 88, 96, 75, 102);
     let over_target = level_to_percent_with_edges(parameters.effort_intensity, 102, 112, 96, 125);
     let recovery_target =
-        level_to_percent_with_edges(parameters.recovery_intensity, 40, 60, 25, 75);
+        level_to_percent_with_edges(parameters.recovery_intensity, 45, 60, 40, 75);
     let repeats_per_set = match parameters.effort_duration {
         1..=3 => 6,
         4..=7 => 5,
@@ -724,7 +724,7 @@ fn build_over_under_session(
                 recovery_target,
                 power_jitter_radius(parameters.variation, 1),
             )
-            .clamp(25, 75);
+            .clamp(40, 75);
         steps.push(WorkoutStep::new(
             format!("Set Recovery {set}"),
             recovery_duration,
@@ -756,9 +756,9 @@ fn build_microburst_session(
         &[120, 150, 180, 210, 240, 300, 360, 420, 480, 540, 600],
     );
     let effort_target = level_to_percent_with_edges(parameters.effort_intensity, 110, 140, 95, 160);
-    let float_target = level_to_percent_with_edges(parameters.recovery_intensity, 35, 85, 25, 100);
+    let float_target = level_to_percent_with_edges(parameters.recovery_intensity, 45, 85, 40, 100);
     let set_recovery_target =
-        level_to_percent_with_edges(parameters.recovery_intensity, 35, 60, 25, 75);
+        level_to_percent_with_edges(parameters.recovery_intensity, 45, 60, 40, 75);
     let min_cycle_secs = u64::from(effort_secs + float_secs);
     let base_repeats_per_set = (480 / (effort_secs + float_secs)).clamp(4, 14);
     let repeat_radius = u16::from(level_index(parameters.variation)) / 5;
@@ -799,7 +799,7 @@ fn build_microburst_session(
                 jitter_short_duration(random, float_secs, parameters.variation, 10, remaining);
             let float_percent = random
                 .jitter(float_target, power_jitter_radius(parameters.variation, 1))
-                .clamp(25, 100);
+                .clamp(40, 100);
             steps.push(WorkoutStep::new(
                 format!("Float {set}.{repeat}"),
                 float_duration,
@@ -824,7 +824,7 @@ fn build_microburst_session(
                 set_recovery_target,
                 power_jitter_radius(parameters.variation, 1),
             )
-            .clamp(25, 75);
+            .clamp(40, 75);
         steps.push(WorkoutStep::new(
             format!("Set Recovery {set}"),
             recovery_duration,
@@ -1281,7 +1281,96 @@ mod tests {
         assert!(easy_efforts.iter().all(|step| step.target_ftp_percent < 88));
         assert!(easy_recoveries
             .iter()
-            .all(|step| step.target_ftp_percent < 40));
+            .all(|step| (40..=41).contains(&step.target_ftp_percent)));
+    }
+
+    #[test]
+    fn recovery_intensity_never_drops_below_forty_percent() {
+        for workout_type in [
+            WorkoutType::Endurance,
+            WorkoutType::Tempo,
+            WorkoutType::SweetSpot,
+            WorkoutType::Threshold,
+            WorkoutType::OverUnder,
+            WorkoutType::Vo2Max,
+            WorkoutType::Sprinting,
+            WorkoutType::Microbursts,
+        ] {
+            let workout = Workout::randomized(WorkoutParameters {
+                duration_minutes: 60,
+                workout_type,
+                effort_intensity: 6,
+                recovery_intensity: 1,
+                effort_duration: 6,
+                recovery_duration: 6,
+                variation: 11,
+            });
+            let recovery_steps: Vec<_> = workout
+                .steps
+                .iter()
+                .filter(|step| match workout_type {
+                    WorkoutType::Endurance => step.name.starts_with("Easy Spin"),
+                    WorkoutType::Tempo
+                    | WorkoutType::SweetSpot
+                    | WorkoutType::Threshold
+                    | WorkoutType::OverUnder
+                    | WorkoutType::Vo2Max => step.name.contains("Recovery"),
+                    WorkoutType::Sprinting => {
+                        step.name.starts_with("Easy Spin") || step.name.starts_with("Set Recovery")
+                    }
+                    WorkoutType::Microbursts => {
+                        step.name.starts_with("Float")
+                            || step.name.starts_with("Set Recovery")
+                            || step.name == "Easy Spin"
+                    }
+                    WorkoutType::Recovery => false,
+                })
+                .collect();
+
+            assert!(
+                !recovery_steps.is_empty(),
+                "{workout_type:?} should contain recovery steps"
+            );
+            assert!(
+                recovery_steps
+                    .iter()
+                    .all(|step| step.target_ftp_percent >= 40),
+                "{workout_type:?} generated a recovery below 40% FTP"
+            );
+        }
+    }
+
+    #[test]
+    fn vo2_and_sprint_recoveries_can_reach_zone_three() {
+        for workout_type in [WorkoutType::Vo2Max, WorkoutType::Sprinting] {
+            let workout = Workout::randomized(WorkoutParameters {
+                duration_minutes: 45,
+                workout_type,
+                effort_intensity: 8,
+                recovery_intensity: 11,
+                effort_duration: 6,
+                recovery_duration: 6,
+                variation: 1,
+            });
+            let recoveries: Vec<_> = workout
+                .steps
+                .iter()
+                .filter(|step| match workout_type {
+                    WorkoutType::Vo2Max => {
+                        step.name.starts_with("Recovery ") || step.name.starts_with("Set Recovery")
+                    }
+                    WorkoutType::Sprinting => {
+                        step.name.starts_with("Easy Spin ") || step.name.starts_with("Set Recovery")
+                    }
+                    _ => false,
+                })
+                .collect();
+
+            assert!(!recoveries.is_empty());
+            assert!(recoveries
+                .iter()
+                .all(|step| (76..=90).contains(&step.target_ftp_percent)));
+        }
     }
 
     #[test]
