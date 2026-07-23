@@ -12,9 +12,11 @@ use crate::bluetooth::heart_rate;
 use crate::bluetooth::uuids::{
     CSC_MEASUREMENT, CYCLING_POWER_MEASUREMENT, CYCLING_POWER_SERVICE,
     CYCLING_SPEED_AND_CADENCE_SERVICE, FITNESS_MACHINE_CONTROL_POINT, FITNESS_MACHINE_SERVICE,
-    HEART_RATE_MEASUREMENT, HEART_RATE_SERVICE, INDOOR_BIKE_DATA,
+    HEART_RATE_MEASUREMENT, HEART_RATE_SERVICE, INDOOR_BIKE_DATA, SUPPORTED_RESISTANCE_LEVEL_RANGE,
 };
 use crate::{DeviceError, DeviceId, DeviceMeasurement, DeviceRole};
+
+const DEFAULT_MANUAL_RESISTANCE_LEVEL: i16 = 200;
 
 pub struct DeviceConnection {
     pub role: DeviceRole,
@@ -23,6 +25,9 @@ pub struct DeviceConnection {
     pub notifications: Option<Pin<Box<dyn Stream<Item = ValueNotification> + Send>>>,
     control_point: Option<Characteristic>,
     control_acquired: bool,
+    erg_active: bool,
+    manual_resistance_level: Option<i16>,
+    manual_resistance_fallback: i16,
     cadence_tracker: CadenceTracker,
 }
 
@@ -73,6 +78,19 @@ impl DeviceConnection {
                         .map(DeviceMeasurement::CadenceRpm)
                 })
             }
+            DeviceRole::SmartTrainer if notification.uuid == INDOOR_BIKE_DATA => {
+                let data = fitness_machine::parse_indoor_bike_data(&notification.value)?;
+                if !self.erg_active {
+                    if let Some(resistance_level) = data.resistance_level {
+                        // Some trainers report zero in their uncontrolled state
+                        // even though their firmware still provides free-ride load.
+                        if resistance_level > 0 {
+                            self.manual_resistance_level = Some(resistance_level);
+                        }
+                    }
+                }
+                Ok(None)
+            }
             _ => Ok(None),
         }
     }
@@ -83,20 +101,31 @@ impl DeviceConnection {
         target_power_watts: u16,
     ) -> Result<(), DeviceError> {
         if enabled {
+            if !self.erg_active && self.manual_resistance_level.is_none() {
+                self.manual_resistance_level = Some(self.manual_resistance_fallback);
+            }
             if !self.control_acquired {
                 self.write_control_command(&fitness_machine::request_control_command())
                     .await?;
                 self.control_acquired = true;
             }
-            self.set_erg_target_power(target_power_watts).await
+            self.set_erg_target_power(target_power_watts).await?;
+            self.erg_active = true;
+            Ok(())
         } else {
             if !self.control_acquired {
+                self.erg_active = false;
                 return Ok(());
             }
-            // Leave target-power mode by selecting the trainer's zero-resistance mode.
-            // Several FTMS trainers accept Stop/Reset without actually clearing ERG.
+            let manual_resistance = self
+                .manual_resistance_level
+                .unwrap_or(self.manual_resistance_fallback);
+            // Switching to resistance mode reliably clears target-power mode on
+            // trainers that accept Stop/Reset without actually clearing ERG.
             if let Err(resistance_error) = self
-                .write_control_command(&fitness_machine::set_target_resistance_level_command(0))
+                .write_control_command(&fitness_machine::set_target_resistance_level_command(
+                    manual_resistance,
+                ))
                 .await
             {
                 if let Err(stop_error) = self
@@ -115,6 +144,7 @@ impl DeviceConnection {
                     self.control_acquired = false;
                 }
             }
+            self.erg_active = false;
             Ok(())
         }
     }
@@ -224,6 +254,16 @@ pub async fn connect(
                 && value.uuid == FITNESS_MACHINE_CONTROL_POINT
         })
         .cloned();
+    let indoor_bike_data = characteristics
+        .iter()
+        .find(|value| {
+            value.service_uuid == FITNESS_MACHINE_SERVICE && value.uuid == INDOOR_BIKE_DATA
+        })
+        .cloned();
+    let supported_resistance_level_range = characteristics.iter().find(|value| {
+        value.service_uuid == FITNESS_MACHINE_SERVICE
+            && value.uuid == SUPPORTED_RESISTANCE_LEVEL_RANGE
+    });
 
     if role == DeviceRole::SmartTrainer {
         let has_ftms = peripheral
@@ -250,15 +290,26 @@ pub async fn connect(
         )));
     }
 
-    let subscribed_characteristic = if role == DeviceRole::SmartTrainer {
-        control_point.as_ref()
+    let mut subscribed_characteristics = Vec::new();
+    if role == DeviceRole::SmartTrainer {
+        if let Some(control_point) = control_point.as_ref() {
+            subscribed_characteristics.push(control_point);
+        }
+        if let Some(indoor_bike_data) = indoor_bike_data.as_ref() {
+            subscribed_characteristics.push(indoor_bike_data);
+        }
+    } else if let Some(characteristic) = characteristic {
+        subscribed_characteristics.push(characteristic);
+    }
+
+    let notifications = if subscribed_characteristics.is_empty() {
+        None
     } else {
-        characteristic
-    };
-    let notifications = if let Some(subscribed_characteristic) = subscribed_characteristic {
-        if let Err(error) = peripheral.subscribe(subscribed_characteristic).await {
-            disconnect_if_owned(&peripheral, was_connected).await;
-            return Err(connection_failed(error));
+        for subscribed_characteristic in subscribed_characteristics {
+            if let Err(error) = peripheral.subscribe(subscribed_characteristic).await {
+                disconnect_if_owned(&peripheral, was_connected).await;
+                return Err(connection_failed(error));
+            }
         }
 
         match peripheral.notifications().await {
@@ -268,8 +319,24 @@ pub async fn connect(
                 return Err(connection_failed(error));
             }
         }
+    };
+
+    let manual_resistance_fallback = if role == DeviceRole::SmartTrainer {
+        if let Some(characteristic) = supported_resistance_level_range {
+            peripheral
+                .read(characteristic)
+                .await
+                .ok()
+                .and_then(|value| {
+                    fitness_machine::parse_supported_resistance_level_range(&value).ok()
+                })
+                .map(default_manual_resistance_level)
+                .unwrap_or(DEFAULT_MANUAL_RESISTANCE_LEVEL)
+        } else {
+            DEFAULT_MANUAL_RESISTANCE_LEVEL
+        }
     } else {
-        None
+        DEFAULT_MANUAL_RESISTANCE_LEVEL
     };
 
     Ok(DeviceConnection {
@@ -279,8 +346,24 @@ pub async fn connect(
         notifications,
         control_point,
         control_acquired: false,
+        erg_active: false,
+        manual_resistance_level: None,
+        manual_resistance_fallback,
         cadence_tracker: CadenceTracker::default(),
     })
+}
+
+fn default_manual_resistance_level(range: fitness_machine::SupportedResistanceLevelRange) -> i16 {
+    let minimum = i32::from(range.minimum);
+    let maximum = i32::from(range.maximum);
+    if maximum <= minimum {
+        return range.minimum;
+    }
+
+    let increment = i32::from(range.minimum_increment.max(1));
+    let desired = minimum + (maximum - minimum) / 5;
+    let steps = (desired - minimum + increment / 2) / increment;
+    (minimum + steps * increment).clamp(minimum, maximum) as i16
 }
 
 async fn disconnect_if_owned(peripheral: &Peripheral, was_connected: bool) {
@@ -304,5 +387,34 @@ fn role_name(role: DeviceRole) -> &'static str {
         DeviceRole::HeartRate => "heart rate",
         DeviceRole::Cadence => "cadence",
         DeviceRole::SmartTrainer => "smart trainer",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chooses_a_moderate_supported_manual_resistance() {
+        assert_eq!(
+            default_manual_resistance_level(fitness_machine::SupportedResistanceLevelRange {
+                minimum: 0,
+                maximum: 1000,
+                minimum_increment: 10,
+            }),
+            200
+        );
+    }
+
+    #[test]
+    fn rounds_manual_resistance_to_a_supported_increment() {
+        assert_eq!(
+            default_manual_resistance_level(fitness_machine::SupportedResistanceLevelRange {
+                minimum: 50,
+                maximum: 400,
+                minimum_increment: 25,
+            }),
+            125
+        );
     }
 }

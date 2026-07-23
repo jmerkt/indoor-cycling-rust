@@ -13,6 +13,14 @@ const SUCCESS_RESULT_CODE: u8 = 0x01;
 pub struct IndoorBikeData {
     pub instantaneous_power_watts: Option<i16>,
     pub instantaneous_cadence_rpm: Option<u16>,
+    pub resistance_level: Option<i16>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SupportedResistanceLevelRange {
+    pub minimum: i16,
+    pub maximum: i16,
+    pub minimum_increment: u16,
 }
 
 pub fn parse_indoor_bike_data(value: &[u8]) -> Result<IndoorBikeData, DeviceError> {
@@ -42,7 +50,9 @@ pub fn parse_indoor_bike_data(value: &[u8]) -> Result<IndoorBikeData, DeviceErro
         offset = skip(value, offset, 3, "total distance")?;
     }
     if flags & (1 << 5) != 0 {
-        offset = skip(value, offset, 2, "resistance level")?;
+        let bytes = read(value, offset, 2, "resistance level")?;
+        data.resistance_level = Some(i16::from_le_bytes([bytes[0], bytes[1]]));
+        offset += 2;
     }
     if flags & (1 << 6) != 0 {
         let bytes = read(value, offset, 2, "instantaneous power")?;
@@ -50,6 +60,20 @@ pub fn parse_indoor_bike_data(value: &[u8]) -> Result<IndoorBikeData, DeviceErro
     }
 
     Ok(data)
+}
+
+pub fn parse_supported_resistance_level_range(
+    value: &[u8],
+) -> Result<SupportedResistanceLevelRange, DeviceError> {
+    let bytes = value.get(..6).ok_or_else(|| {
+        DeviceError::InvalidData("supported resistance level range is incomplete".to_owned())
+    })?;
+
+    Ok(SupportedResistanceLevelRange {
+        minimum: i16::from_le_bytes([bytes[0], bytes[1]]),
+        maximum: i16::from_le_bytes([bytes[2], bytes[3]]),
+        minimum_increment: u16::from_le_bytes([bytes[4], bytes[5]]),
+    })
 }
 
 pub fn request_control_command() -> [u8; 1] {
@@ -152,6 +176,36 @@ mod tests {
             IndoorBikeData {
                 instantaneous_power_watts: Some(250),
                 instantaneous_cadence_rpm: Some(90),
+                resistance_level: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_resistance_level() {
+        let flags = 1_u16 << 5;
+        let value = [
+            flags as u8,
+            (flags >> 8) as u8,
+            0x10,
+            0x27, // speed
+            200,
+            0, // resistance level 20.0
+        ];
+        assert_eq!(
+            parse_indoor_bike_data(&value).unwrap().resistance_level,
+            Some(200)
+        );
+    }
+
+    #[test]
+    fn parses_supported_resistance_level_range() {
+        assert_eq!(
+            parse_supported_resistance_level_range(&[0, 0, 0xe8, 0x03, 10, 0]).unwrap(),
+            SupportedResistanceLevelRange {
+                minimum: 0,
+                maximum: 1000,
+                minimum_increment: 10,
             }
         );
     }

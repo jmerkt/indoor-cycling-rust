@@ -11,6 +11,7 @@ pub const HEART_RATE_MEASUREMENT: Uuid = bluetooth_uuid(0x2a37);
 pub const CYCLING_POWER_MEASUREMENT: Uuid = bluetooth_uuid(0x2a63);
 pub const CSC_MEASUREMENT: Uuid = bluetooth_uuid(0x2a5b);
 pub const INDOOR_BIKE_DATA: Uuid = bluetooth_uuid(0x2ad2);
+pub const SUPPORTED_RESISTANCE_LEVEL_RANGE: Uuid = bluetooth_uuid(0x2ad6);
 pub const FITNESS_MACHINE_CONTROL_POINT: Uuid = bluetooth_uuid(0x2ad9);
 
 const fn bluetooth_uuid(short_uuid: u16) -> Uuid {
@@ -46,6 +47,10 @@ mod tests {
         assert_eq!(
             INDOOR_BIKE_DATA.to_string(),
             "00002ad2-0000-1000-8000-00805f9b34fb"
+        );
+        assert_eq!(
+            SUPPORTED_RESISTANCE_LEVEL_RANGE.to_string(),
+            "00002ad6-0000-1000-8000-00805f9b34fb"
         );
         assert_eq!(
             FITNESS_MACHINE_CONTROL_POINT.to_string(),
