@@ -1182,9 +1182,35 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
     match phase {
         WorkoutPhase::NotStarted => {
             let first_step = workout.steps.first();
+            set_timeline_stage_position(window, workout, first_step.map(|_| 0));
             window.set_target_power_watts(
                 first_step
                     .map(|step| i32::from(step.target_power_watts(state.ftp_watts)))
+                    .unwrap_or_default(),
+            );
+            window.set_current_stage_name(
+                first_step
+                    .map(|step| step.name.as_str())
+                    .unwrap_or("No workout")
+                    .into(),
+            );
+            window.set_current_stage_position(
+                if first_step.is_some() {
+                    format!("STAGE 1 OF {}", workout.steps.len())
+                } else {
+                    "NO STAGES".to_owned()
+                }
+                .into(),
+            );
+            window.set_step_remaining_text(
+                first_step
+                    .map(|step| format_duration(step.duration_secs))
+                    .unwrap_or_else(|| "00:00".to_owned())
+                    .into(),
+            );
+            window.set_current_target_percent(
+                first_step
+                    .map(|step| i32::from(step.target_ftp_percent))
                     .unwrap_or_default(),
             );
             window.set_workout_status(
@@ -1208,9 +1234,16 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
             step_elapsed_secs,
             step,
         } => {
+            set_timeline_stage_position(window, workout, Some(*step_index));
             let remaining_secs = step.duration_secs.saturating_sub(*step_elapsed_secs);
             let target_watts = step.target_power_watts(state.ftp_watts);
             window.set_target_power_watts(i32::from(target_watts));
+            window.set_current_stage_name(step.name.clone().into());
+            window.set_current_stage_position(
+                format!("STAGE {} OF {}", step_index + 1, workout.steps.len()).into(),
+            );
+            window.set_step_remaining_text(format_duration(remaining_secs).into());
+            window.set_current_target_percent(i32::from(step.target_ftp_percent));
             window.set_workout_status(
                 format!(
                     "Stage {} of {}: {} | {} remaining | {} W ({}% FTP)",
@@ -1227,12 +1260,57 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
             window.set_can_skip_stage(true);
         }
         WorkoutPhase::Finished => {
+            set_timeline_stage_position(window, workout, workout.steps.len().checked_sub(1));
             window.set_target_power_watts(0);
+            window.set_current_stage_name("Workout complete".into());
+            window.set_current_stage_position(
+                format!("{} STAGES COMPLETE", workout.steps.len()).into(),
+            );
+            window.set_step_remaining_text("00:00".into());
+            window.set_current_target_percent(0);
             window.set_workout_status("Workout complete".into());
             window.set_can_go_previous_stage(!workout.steps.is_empty());
             window.set_can_skip_stage(false);
         }
     }
+}
+
+fn set_timeline_stage_position(window: &AppWindow, workout: &Workout, stage_index: Option<usize>) {
+    let Some(stage_index) = stage_index else {
+        window.set_timeline_active_stage_width(112);
+        window.set_timeline_active_stage_offset(0);
+        return;
+    };
+
+    let offset_px = timeline_stage_offset_px(workout, stage_index);
+    let width_px = workout
+        .steps
+        .get(stage_index)
+        .map(|step| timeline_stage_width_px(step.duration_secs))
+        .unwrap_or(112);
+
+    window.set_timeline_active_stage_width(i32::try_from(width_px).unwrap_or(i32::MAX));
+    window.set_timeline_active_stage_offset(i32::try_from(offset_px).unwrap_or(i32::MAX));
+}
+
+fn timeline_stage_offset_px(workout: &Workout, stage_index: usize) -> u64 {
+    workout
+        .steps
+        .iter()
+        .take(stage_index)
+        .fold(0_u64, |offset, step| {
+            offset
+                .saturating_add(timeline_stage_width_px(step.duration_secs))
+                .saturating_add(8)
+        })
+}
+
+fn timeline_stage_width_px(duration_secs: u64) -> u64 {
+    duration_secs
+        .saturating_mul(22)
+        .saturating_add(99)
+        .saturating_div(100)
+        .max(112)
 }
 
 fn format_duration(total_secs: u64) -> String {
@@ -1416,5 +1494,21 @@ mod tests {
 
         assert_eq!(current_target_power(&state), Some(300));
         assert!(state.running);
+    }
+
+    #[test]
+    fn timeline_offsets_follow_rendered_stage_widths() {
+        let workout = Workout::new(
+            "Timeline",
+            vec![
+                WorkoutStep::new("Short", 60, 50),
+                WorkoutStep::new("Long", 900, 80),
+                WorkoutStep::new("Next", 300, 100),
+            ],
+        );
+
+        assert_eq!(timeline_stage_width_px(60), 112);
+        assert_eq!(timeline_stage_width_px(900), 198);
+        assert_eq!(timeline_stage_offset_px(&workout, 2), 326);
     }
 }

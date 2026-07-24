@@ -1,4 +1,25 @@
-import { ScrollView, Slider, VerticalBox, HorizontalBox } from "std-widgets.slint";
+import { Palette, ScrollView, Slider, VerticalBox, HorizontalBox } from "std-widgets.slint";
+
+global Theme {
+    out property <brush> app-background: #080c12;
+    out property <brush> header-background: #0d131d;
+    out property <brush> surface: #111925;
+    out property <brush> surface-raised: #172231;
+    out property <brush> surface-hover: #202e40;
+    out property <brush> border: #273548;
+    out property <brush> border-strong: #3a4b63;
+    out property <brush> text: #f4f7fb;
+    out property <brush> text-secondary: #a7b4c5;
+    out property <brush> text-muted: #738398;
+    out property <brush> accent: #2dd4bf;
+    out property <brush> accent-strong: #14b8a6;
+    out property <brush> accent-soft: #123a3a;
+    out property <brush> success: #34d399;
+    out property <brush> warning: #fbbf24;
+    out property <brush> danger: #fb7185;
+    out property <brush> blue: #60a5fa;
+    out property <brush> violet: #a78bfa;
+}
 
 export struct DeviceListItem {
     id: string,
@@ -25,22 +46,29 @@ export struct WorkoutStageItem {
 component ActionButton inherits Rectangle {
     in property <string> text;
     in property <bool> enabled: true;
+    // 0 = secondary, 1 = primary, 2 = destructive
+    in property <int> variant: 0;
     callback clicked();
 
-    min-width: 110px;
-    min-height: 40px;
+    min-width: 120px;
+    min-height: 44px;
+    max-height: 44px;
     horizontal-stretch: 1;
-    opacity: root.enabled ? 1 : 0.55;
-    background: touch.pressed && root.enabled ? #d8dde3 : touch.has-hover && root.enabled ? #eef1f4 : white;
-    border-color: #c7ced6;
+    opacity: root.enabled ? 1 : 0.4;
+    background: root.variant == 1
+        ? touch.pressed && root.enabled ? #0f9488 : touch.has-hover && root.enabled ? #22c7b5 : Theme.accent-strong
+        : root.variant == 2
+            ? touch.pressed && root.enabled ? #4a202b : touch.has-hover && root.enabled ? #39202a : transparent
+            : touch.pressed && root.enabled ? #273548 : touch.has-hover && root.enabled ? Theme.surface-hover : Theme.surface-raised;
+    border-color: root.variant == 1 ? Theme.accent-strong : root.variant == 2 ? #7f3547 : Theme.border-strong;
     border-width: 1px;
-    border-radius: 5px;
+    border-radius: 8px;
 
     Text {
         text: root.text;
-        color: #17202a;
-        font-size: 15px;
-        font-weight: 600;
+        color: root.variant == 1 ? #041412 : root.variant == 2 ? Theme.danger : Theme.text;
+        font-size: 14px;
+        font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -56,17 +84,19 @@ component MenuButton inherits Rectangle {
     in property <bool> selected;
     callback clicked();
 
-    min-width: 120px;
+    min-width: 112px;
     min-height: 42px;
     max-height: 42px;
-    background: root.selected ? #0f766e : touch.has-hover ? #eef1f4 : transparent;
-    border-radius: 5px;
+    background: root.selected ? Theme.accent-soft : touch.has-hover ? Theme.surface-raised : transparent;
+    border-color: root.selected ? #24695f : transparent;
+    border-width: 1px;
+    border-radius: 9px;
 
     Text {
         text: root.text;
-        color: root.selected ? white : #17202a;
-        font-size: 15px;
-        font-weight: 600;
+        color: root.selected ? Theme.accent : Theme.text-secondary;
+        font-size: 14px;
+        font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -81,19 +111,19 @@ component WorkoutTypeButton inherits Rectangle {
     in property <bool> selected;
     callback clicked();
 
-    min-width: 116px;
-    min-height: 36px;
-    max-height: 36px;
-    background: root.selected ? #0f766e : touch.has-hover ? #eef1f4 : white;
-    border-color: root.selected ? #0f766e : #c7ced6;
+    min-width: 120px;
+    min-height: 42px;
+    max-height: 42px;
+    background: root.selected ? Theme.accent-soft : touch.has-hover ? Theme.surface-hover : Theme.surface-raised;
+    border-color: root.selected ? Theme.accent-strong : Theme.border;
     border-width: 1px;
-    border-radius: 5px;
+    border-radius: 8px;
 
     Text {
         text: root.text;
-        color: root.selected ? white : #17202a;
+        color: root.selected ? Theme.accent : Theme.text-secondary;
         font-size: 13px;
-        font-weight: 600;
+        font-weight: 700;
         horizontal-alignment: center;
         vertical-alignment: center;
     }
@@ -113,14 +143,14 @@ component FtpStepButton inherits Rectangle {
     min-height: 40px;
     max-height: 40px;
     opacity: root.enabled ? 1 : 0.45;
-    background: touch.pressed && root.enabled ? #d8dde3 : touch.has-hover && root.enabled ? #eef1f4 : white;
-    border-color: #aeb8c2;
+    background: touch.pressed && root.enabled ? #2b3c50 : touch.has-hover && root.enabled ? Theme.surface-hover : Theme.surface-raised;
+    border-color: Theme.border-strong;
     border-width: 1px;
-    border-radius: 5px;
+    border-radius: 8px;
 
     Text {
         text: root.text;
-        color: #17202a;
+        color: Theme.text;
         font-size: 22px;
         font-weight: 700;
         horizontal-alignment: center;
@@ -148,14 +178,14 @@ component FtpControl inherits Rectangle {
         root.changed(bounded-value);
     }
 
-    min-width: 220px;
-    max-width: 220px;
+    min-width: 210px;
+    max-width: 210px;
     min-height: 116px;
     max-height: 116px;
-    background: white;
-    border-color: #cbd5df;
+    background: Theme.surface;
+    border-color: Theme.border;
     border-width: 1px;
-    border-radius: 8px;
+    border-radius: 12px;
 
     VerticalBox {
         padding: 14px;
@@ -163,9 +193,9 @@ component FtpControl inherits Rectangle {
 
         Text {
             text: "FTP";
-            color: #53616f;
-            font-size: 15px;
-            font-weight: 600;
+            color: Theme.text-secondary;
+            font-size: 13px;
+            font-weight: 700;
         }
 
         HorizontalBox {
@@ -181,7 +211,7 @@ component FtpControl inherits Rectangle {
                 text: root.value + "";
                 font-size: 26px;
                 font-weight: 800;
-                color: #17202a;
+                color: Theme.text;
                 horizontal-alignment: right;
                 vertical-alignment: center;
                 min-width: 70px;
@@ -197,7 +227,7 @@ component FtpControl inherits Rectangle {
 
             Text {
                 text: "W";
-                color: #53616f;
+                color: Theme.text-secondary;
                 font-size: 15px;
                 font-weight: 600;
                 vertical-alignment: center;
@@ -212,6 +242,117 @@ component FtpControl inherits Rectangle {
     }
 }
 
+component InlineFtpStepButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    min-width: 30px;
+    max-width: 30px;
+    min-height: 30px;
+    max-height: 30px;
+    opacity: root.enabled ? 1 : 0.4;
+    background: touch.pressed && root.enabled ? #2b3c50
+        : touch.has-hover && root.enabled ? Theme.surface-hover : Theme.surface;
+    border-color: Theme.border-strong;
+    border-width: 1px;
+    border-radius: 6px;
+
+    Text {
+        text: root.text;
+        color: Theme.text;
+        font-size: 18px;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+component CompactFtpControl inherits Rectangle {
+    in property <int> value;
+    in property <int> step-value: 5;
+    callback changed(int);
+
+    changed value => {
+        ftp-input.text = root.value + "";
+    }
+
+    function apply-value(value: int) {
+        let bounded-value = max(50, min(600, value));
+        ftp-input.text = bounded-value + "";
+        root.changed(bounded-value);
+    }
+
+    min-width: 220px;
+    max-width: 220px;
+    min-height: 42px;
+    max-height: 42px;
+    background: Theme.surface-raised;
+    border-color: Theme.border-strong;
+    border-width: 1px;
+    border-radius: 8px;
+
+    HorizontalBox {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 5px;
+
+        Text {
+            text: "FTP";
+            color: Theme.text-secondary;
+            font-size: 11px;
+            font-weight: 800;
+            min-width: 30px;
+            vertical-alignment: center;
+        }
+
+        InlineFtpStepButton {
+            text: "−";
+            enabled: root.value > 50;
+            clicked => { root.apply-value(root.value - root.step-value); }
+        }
+
+        ftp-input := TextInput {
+            text: root.value + "";
+            color: Theme.text;
+            font-size: 16px;
+            font-weight: 800;
+            min-width: 52px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            accepted => {
+                if self.text.is-float() {
+                    root.apply-value(round(self.text.to-float()));
+                } else {
+                    self.text = root.value + "";
+                }
+                self.clear-focus();
+            }
+        }
+
+        Text {
+            text: "W";
+            color: Theme.text-muted;
+            font-size: 11px;
+            min-width: 14px;
+            vertical-alignment: center;
+        }
+
+        InlineFtpStepButton {
+            text: "+";
+            enabled: root.value < 600;
+            clicked => { root.apply-value(root.value + root.step-value); }
+        }
+    }
+}
+
 component BuilderSliderRow inherits Rectangle {
     in property <string> label;
     in property <int> value;
@@ -221,16 +362,21 @@ component BuilderSliderRow inherits Rectangle {
     in property <string> suffix: " / 11";
     callback changed(int);
 
-    min-height: 48px;
-    background: transparent;
+    min-height: 56px;
+    background: Theme.surface-raised;
+    border-color: Theme.border;
+    border-width: 1px;
+    border-radius: 9px;
 
     HorizontalBox {
-        spacing: 12px;
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 16px;
 
         Text {
             text: root.label;
-            color: #334155;
-            font-size: 15px;
+            color: Theme.text-secondary;
+            font-size: 14px;
             font-weight: 700;
             min-width: 160px;
             vertical-alignment: center;
@@ -249,17 +395,17 @@ component BuilderSliderRow inherits Rectangle {
 
         Text {
             text: root.value + root.suffix;
-            color: #0f766e;
-            font-size: 22px;
+            color: Theme.accent;
+            font-size: 20px;
             font-weight: 800;
-            min-width: 88px;
+            min-width: 100px;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
 }
 
-component ErgControl inherits Rectangle {
+component CompactErgControl inherits Rectangle {
     in property <bool> enabled;
     in property <bool> available;
     in property <bool> pending;
@@ -267,95 +413,104 @@ component ErgControl inherits Rectangle {
     in property <string> status;
     callback toggled();
 
-    min-width: 180px;
-    max-width: 180px;
-    min-height: 116px;
-    max-height: 116px;
-    background: root.enabled ? #ecfdf5 : white;
-    border-color: root.enabled ? #0f766e : #cbd5df;
-    border-width: root.enabled ? 2px : 1px;
+    min-width: 240px;
+    max-width: 240px;
+    min-height: 42px;
+    max-height: 42px;
+    opacity: root.available && !root.pending ? 1 : 0.72;
+    background: root.enabled ? Theme.accent-soft : Theme.surface-raised;
+    border-color: root.error ? Theme.danger : root.enabled ? Theme.accent-strong : Theme.border-strong;
+    border-width: 1px;
     border-radius: 8px;
 
     HorizontalBox {
-        padding: 12px;
-        spacing: 10px;
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 8px;
 
         VerticalBox {
-            spacing: 2px;
+            spacing: 0px;
 
             Text {
-                text: "ERG Mode";
-                color: #17202a;
-                font-size: 15px;
-                font-weight: 700;
+                text: "ERG MODE";
+                color: root.error ? Theme.danger : root.enabled ? Theme.accent : Theme.text;
+                font-size: 11px;
+                font-weight: 800;
+                vertical-alignment: bottom;
             }
 
             Text {
-                text: root.status;
-                color: root.error ? #be123c : #53616f;
-                font-size: 11px;
+                text: root.error ? root.status
+                    : root.pending ? "Updating trainer…"
+                    : root.status;
+                color: root.error ? Theme.danger : Theme.text-muted;
+                font-size: 9px;
+                vertical-alignment: top;
                 overflow: elide;
             }
         }
 
         Rectangle {
-            min-width: 54px;
-            max-width: 54px;
-            min-height: 34px;
-            max-height: 34px;
-            opacity: root.available && !root.pending ? 1 : 0.45;
-            background: root.enabled ? #0f766e : #e6ebf0;
-            border-color: root.enabled ? #0f766e : #aeb8c2;
-            border-width: 1px;
-            border-radius: 17px;
+            min-width: 42px;
+            max-width: 42px;
+            min-height: 24px;
+            max-height: 24px;
+            background: root.enabled ? Theme.accent-strong : #263345;
+            border-radius: 12px;
 
-            Text {
-                text: root.pending ? "..." : root.enabled ? "ON" : "OFF";
-                color: root.enabled ? white : #53616f;
-                font-size: 12px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            touch := TouchArea {
-                enabled: root.available && !root.pending;
-                clicked => { root.toggled(); }
+            Rectangle {
+                x: root.enabled ? parent.width - self.width - 3px : 3px;
+                y: 3px;
+                width: 18px;
+                height: 18px;
+                background: root.enabled ? #eafffb : #8493a7;
+                border-radius: 9px;
             }
         }
+    }
+
+    TouchArea {
+        enabled: root.available && !root.pending;
+        clicked => { root.toggled(); }
     }
 }
 
 component DashboardStat inherits Rectangle {
     in property <string> label;
     in property <string> value;
+    in property <string> suffix;
 
-    min-width: 120px;
-    max-width: 120px;
+    min-width: 150px;
     min-height: 116px;
     max-height: 116px;
-    background: white;
-    border-color: #cbd5df;
+    background: Theme.surface;
+    border-color: Theme.border;
     border-width: 1px;
-    border-radius: 8px;
+    border-radius: 12px;
 
     VerticalBox {
-        padding: 12px;
-        spacing: 2px;
+        padding: 14px;
+        spacing: 6px;
 
         Text {
             text: root.label;
-            color: #53616f;
-            font-size: 15px;
-            font-weight: 600;
+            color: Theme.text-secondary;
+            font-size: 12px;
+            font-weight: 700;
         }
 
         Text {
             text: root.value;
-            color: #17202a;
-            font-size: 30px;
+            color: Theme.text;
+            font-size: 28px;
             font-weight: 800;
             overflow: elide;
+        }
+
+        Text {
+            text: root.suffix;
+            color: Theme.text-muted;
+            font-size: 11px;
         }
     }
 }
@@ -372,19 +527,11 @@ component RideStatusLed inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 14px;
         height: 14px;
-        background: root.status == "Riding" ? #16a34a : root.status == "Paused" ? #eab308 : #dc2626;
-        border-color: root.status == "Riding" ? #15803d : root.status == "Paused" ? #ca8a04 : #b91c1c;
+        background: root.status == "Riding" ? Theme.success : root.status == "Paused" ? Theme.warning : Theme.text-muted;
+        border-color: root.status == "Riding" ? #6ee7b7 : root.status == "Paused" ? #fde68a : #9ba9ba;
         border-width: 1px;
         border-radius: 7px;
     }
-}
-
-component DashboardDivider inherits Rectangle {
-    min-width: 1px;
-    max-width: 1px;
-    min-height: 72px;
-    max-height: 72px;
-    background: #d8dde3;
 }
 
 component MetricTile inherits Rectangle {
@@ -393,12 +540,11 @@ component MetricTile inherits Rectangle {
     in property <string> suffix;
     in property <brush> accent;
 
-    background: #fbfcfd;
-    border-color: #d8dde3;
+    background: Theme.surface;
+    border-color: Theme.border;
     border-width: 1px;
-    border-radius: 8px;
-    min-width: 130px;
-    max-width: 130px;
+    border-radius: 12px;
+    min-width: 142px;
     min-height: 116px;
     max-height: 116px;
 
@@ -408,20 +554,21 @@ component MetricTile inherits Rectangle {
 
         Text {
             text: root.label;
-            color: #53616f;
-            font-size: 15px;
+            color: Theme.text-secondary;
+            font-size: 12px;
+            font-weight: 700;
             horizontal-alignment: center;
         }
 
         Text {
             text: root.value;
             color: root.accent;
-            font-size: 34px;
+            font-size: 36px;
             font-weight: 800;
             horizontal-alignment: center;
         }
 
-        Text { text: root.suffix; color: #53616f; font-size: 14px; horizontal-alignment: center; }
+        Text { text: root.suffix; color: Theme.text-muted; font-size: 12px; horizontal-alignment: center; }
     }
 }
 
@@ -429,19 +576,20 @@ component PowerMetricTile inherits Rectangle {
     in property <int> primary-value;
     in property <int> secondary-value;
     in property <int> target-value;
+    in property <bool> feedback-active;
 
     private property <int> target-margin: max(10, root.target-value / 20);
     private property <bool> has-target: root.target-value > 0;
+    private property <bool> show-feedback: root.feedback-active && root.has-target;
     private property <bool> on-target: root.has-target
         && root.primary-value >= root.target-value - root.target-margin
         && root.primary-value <= root.target-value + root.target-margin;
 
-    background: #fbfcfd;
-    border-color: !root.has-target ? #d8dde3 : root.on-target ? #16a34a : #dc2626;
-    border-width: root.has-target ? 3px : 1px;
-    border-radius: 8px;
-    min-width: 130px;
-    max-width: 130px;
+    background: Theme.surface;
+    border-color: !root.show-feedback ? Theme.border : root.on-target ? Theme.success : Theme.danger;
+    border-width: root.show-feedback ? 3px : 1px;
+    border-radius: 12px;
+    min-width: 142px;
     min-height: 116px;
     max-height: 116px;
 
@@ -450,24 +598,25 @@ component PowerMetricTile inherits Rectangle {
         spacing: 1px;
 
         Text {
-            text: "Power";
-            color: #53616f;
-            font-size: 15px;
+            text: "POWER";
+            color: Theme.text-secondary;
+            font-size: 12px;
+            font-weight: 700;
             horizontal-alignment: center;
         }
 
         Text {
             text: root.primary-value;
-            color: #0f766e;
-            font-size: 34px;
+            color: Theme.accent;
+            font-size: 36px;
             font-weight: 800;
             horizontal-alignment: center;
         }
 
         Text {
             text: "W";
-            color: #53616f;
-            font-size: 14px;
+            color: Theme.text-muted;
+            font-size: 12px;
             horizontal-alignment: center;
         }
 
@@ -475,10 +624,200 @@ component PowerMetricTile inherits Rectangle {
             text: root.secondary-value > 0
                 ? "Secondary  " + root.secondary-value + " W"
                 : "Secondary  -- W";
-            color: #7c3aed;
+            color: Theme.violet;
             font-size: 11px;
             font-weight: 600;
             horizontal-alignment: center;
+        }
+    }
+}
+
+component CurrentIntervalPanel inherits Rectangle {
+    in property <string> workout-name;
+    in property <string> stage-name;
+    in property <string> stage-position;
+    in property <string> remaining-text;
+    in property <string> ride-status;
+    in property <int> target-watts;
+    in property <int> target-percent;
+
+    min-width: 560px;
+    min-height: 202px;
+    max-height: 202px;
+    background: @linear-gradient(110deg, #14272d 0%, #111925 58%, #151c29 100%);
+    border-color: #285b59;
+    border-width: 1px;
+    border-radius: 14px;
+    clip: true;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 5px;
+        height: parent.height;
+        background: Theme.accent;
+    }
+
+    HorizontalBox {
+        padding: 22px;
+        spacing: 24px;
+
+        VerticalBox {
+            spacing: 6px;
+
+            HorizontalBox {
+                min-height: 28px;
+                max-height: 28px;
+                spacing: 8px;
+
+                Rectangle {
+                    min-width: 96px;
+                    max-width: 96px;
+                    background: Theme.surface-raised;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    border-radius: 7px;
+
+                    HorizontalBox {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 7px;
+
+                        RideStatusLed { status: root.ride-status; }
+
+                        Text {
+                            text: root.ride-status;
+                            color: root.ride-status == "Riding" ? Theme.success
+                                : root.ride-status == "Paused" ? Theme.warning : Theme.text-secondary;
+                            font-size: 11px;
+                            font-weight: 800;
+                            vertical-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    min-width: 124px;
+                    max-width: 124px;
+                    background: #162832;
+                    border-color: #28505b;
+                    border-width: 1px;
+                    border-radius: 7px;
+
+                    Text {
+                        text: root.stage-position;
+                        color: Theme.text-secondary;
+                        font-size: 11px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            Text {
+                text: root.stage-name;
+                color: Theme.text;
+                font-size: 30px;
+                font-weight: 800;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.workout-name;
+                color: Theme.text-secondary;
+                font-size: 14px;
+                overflow: elide;
+            }
+
+            Rectangle { background: transparent; vertical-stretch: 1; }
+
+            HorizontalBox {
+                min-height: 38px;
+                max-height: 38px;
+                spacing: 10px;
+
+                Rectangle {
+                    min-width: 106px;
+                    max-width: 106px;
+                    background: #1b3440;
+                    border-color: #2c5b68;
+                    border-width: 1px;
+                    border-radius: 7px;
+
+                    Text {
+                        text: root.target-watts + " W";
+                        color: Theme.accent;
+                        font-size: 17px;
+                        font-weight: 800;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    min-width: 92px;
+                    max-width: 92px;
+                    background: Theme.surface-raised;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    border-radius: 7px;
+
+                    Text {
+                        text: root.target-percent + "% FTP";
+                        color: Theme.text-secondary;
+                        font-size: 12px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            min-width: 1px;
+            max-width: 1px;
+            min-height: 130px;
+            max-height: 130px;
+            background: #2a4349;
+        }
+
+        VerticalBox {
+            min-width: 250px;
+            spacing: 2px;
+
+            Text {
+                text: "STEP REMAINING";
+                color: Theme.text-secondary;
+                font-size: 12px;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: root.remaining-text;
+                color: Theme.text;
+                font-size: 62px;
+                font-weight: 900;
+                letter-spacing: 1px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: root.ride-status == "Riding" ? "KEEP YOUR RHYTHM"
+                    : root.ride-status == "Paused" ? "WORKOUT PAUSED"
+                    : root.ride-status == "Finished" ? "RIDE COMPLETE"
+                    : "PRESS START WHEN READY";
+                color: root.ride-status == "Paused" ? Theme.warning
+                    : root.ride-status == "Finished" ? Theme.success : Theme.accent;
+                font-size: 11px;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
         }
     }
 }
@@ -496,20 +835,21 @@ component WorkoutStageBlock inherits Rectangle {
     min-height: 118px;
     // FTP-relative training zones: recovery, endurance (Zone 2), tempo,
     // sweet spot, threshold, VO2 max, and anaerobic capacity.
-    background: root.target-percent <= 55 ? #e2e8f0
-        : root.target-percent <= 75 ? #dbeafe
-        : root.target-percent <= 87 ? #dcfce7
-        : root.target-percent <= 94 ? #fef3c7
-        : root.target-percent <= 105 ? #ffedd5
-        : root.target-percent <= 120 ? #fee2e2 : #f3e8ff;
+    opacity: root.completed ? 0.58 : 1;
+    background: root.target-percent <= 55 ? #202a38
+        : root.target-percent <= 75 ? #102746
+        : root.target-percent <= 87 ? #102e2b
+        : root.target-percent <= 94 ? #302a13
+        : root.target-percent <= 105 ? #342115
+        : root.target-percent <= 120 ? #381a24 : #2d1b3e;
     border-color: root.target-percent <= 55 ? #64748b
-        : root.target-percent <= 75 ? #2563eb
-        : root.target-percent <= 87 ? #16a34a
-        : root.target-percent <= 94 ? #ca8a04
-        : root.target-percent <= 105 ? #ea580c
-        : root.target-percent <= 120 ? #dc2626 : #9333ea;
+        : root.target-percent <= 75 ? #3b82f6
+        : root.target-percent <= 87 ? #22c55e
+        : root.target-percent <= 94 ? #eab308
+        : root.target-percent <= 105 ? #f97316
+        : root.target-percent <= 120 ? #ef4444 : #a855f7;
     border-width: root.active ? 3px : 1px;
-    border-radius: 6px;
+    border-radius: 9px;
 
     VerticalBox {
         padding: 12px;
@@ -517,7 +857,7 @@ component WorkoutStageBlock inherits Rectangle {
 
         Text {
             text: root.stage-name;
-            color: #17202a;
+            color: Theme.text;
             font-size: 15px;
             font-weight: 700;
             horizontal-alignment: center;
@@ -526,7 +866,7 @@ component WorkoutStageBlock inherits Rectangle {
 
         Text {
             text: root.target-watts + " W";
-            color: root.active ? #0f766e : #334155;
+            color: root.active ? Theme.text : Theme.text-secondary;
             font-size: 22px;
             font-weight: 800;
             horizontal-alignment: center;
@@ -534,7 +874,7 @@ component WorkoutStageBlock inherits Rectangle {
 
         Text {
             text: root.target-percent + "% FTP  /  " + root.duration-text;
-            color: #64748b;
+            color: Theme.text-muted;
             font-size: 12px;
             horizontal-alignment: center;
         }
@@ -546,12 +886,12 @@ component WorkoutStageBlock inherits Rectangle {
                 : root.target-percent <= 94 ? "Sweet Spot"
                 : root.target-percent <= 105 ? "Threshold"
                 : root.target-percent <= 120 ? "VO2 Max" : "Anaerobic";
-            color: root.target-percent <= 55 ? #475569
-                : root.target-percent <= 75 ? #1d4ed8
-                : root.target-percent <= 87 ? #15803d
-                : root.target-percent <= 94 ? #a16207
-                : root.target-percent <= 105 ? #c2410c
-                : root.target-percent <= 120 ? #b91c1c : #7e22ce;
+            color: root.target-percent <= 55 ? #a8b4c4
+                : root.target-percent <= 75 ? #60a5fa
+                : root.target-percent <= 87 ? #4ade80
+                : root.target-percent <= 94 ? #facc15
+                : root.target-percent <= 105 ? #fb923c
+                : root.target-percent <= 120 ? #fb7185 : #c084fc;
             font-size: 11px;
             font-weight: 700;
             horizontal-alignment: center;
@@ -573,16 +913,66 @@ component WorkoutStageBlock inherits Rectangle {
     }
 }
 
+component WorkoutTimeline inherits Rectangle {
+    in property <[WorkoutStageItem]> stages;
+    in property <int> active-stage-offset;
+    in property <int> active-stage-width;
+
+    function reveal-active-stage() {
+        let stage-left = root.active-stage-offset * 1px;
+        let stage-right = stage-left + root.active-stage-width * 1px;
+        let visible-left = timeline-scroll.viewport-x;
+        let visible-right = visible-left + timeline-scroll.visible-width;
+        let maximum-scroll = max(0px, timeline-scroll.viewport-width - timeline-scroll.visible-width);
+
+        if stage-left < visible-left {
+            timeline-scroll.viewport-x = max(0px, stage-left - 8px);
+        } else if stage-right > visible-right {
+            timeline-scroll.viewport-x = min(maximum-scroll, stage-right - timeline-scroll.visible-width + 8px);
+        }
+    }
+
+    changed active-stage-offset => {
+        root.reveal-active-stage();
+    }
+
+    timeline-scroll := ScrollView {
+        viewport-width: max(self.visible-width, stage-row.preferred-width);
+        viewport-height: self.visible-height;
+        vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+
+        stage-row := HorizontalBox {
+            width: timeline-scroll.viewport-width;
+            height: timeline-scroll.viewport-height;
+            spacing: 8px;
+
+            for stage in root.stages : WorkoutStageBlock {
+                horizontal-stretch: stage.duration-secs;
+                min-width: max(112px, stage.duration-secs * 0.22px);
+                stage-name: stage.name;
+                duration-text: stage.duration-text;
+                target-percent: stage.target-percent;
+                target-watts: stage.target-watts;
+                progress-percent: stage.progress-percent;
+                active: stage.active;
+                completed: stage.completed;
+            }
+        }
+    }
+}
+
 component RoleStatus inherits Rectangle {
     in property <string> label;
     in property <string> value;
+    in property <string> status;
     in property <bool> connected;
+    in property <bool> error;
     callback disconnect();
 
-    background: white;
-    border-color: root.connected ? #16a34a : #dc2626;
-    border-width: 2px;
-    border-radius: 8px;
+    background: Theme.surface;
+    border-color: root.error ? #7f3547 : root.connected ? #26634f : Theme.border;
+    border-width: 1px;
+    border-radius: 12px;
     min-height: 92px;
 
     HorizontalBox {
@@ -594,21 +984,22 @@ component RoleStatus inherits Rectangle {
 
             Text {
                 text: root.label;
-                color: #53616f;
+                color: Theme.text-secondary;
                 font-size: 13px;
             }
 
             Text {
-                text: root.connected ? "Connected" : "Not connected";
-                color: root.connected ? #15803d : #b91c1c;
-                font-size: 15px;
-                font-weight: 600;
+                text: root.status;
+                color: root.error ? Theme.danger : root.connected ? Theme.success : Theme.text-muted;
+                font-size: 12px;
+                font-weight: 700;
+                overflow: elide;
             }
         }
 
         Text {
             text: root.value;
-            color: #0f766e;
+            color: root.connected ? Theme.accent : Theme.text-muted;
             font-size: 22px;
             font-weight: 700;
             horizontal-alignment: right;
@@ -618,7 +1009,8 @@ component RoleStatus inherits Rectangle {
 
         if root.connected : ActionButton {
             text: "Disconnect";
-            max-width: 96px;
+            min-width: 108px;
+            max-width: 108px;
             clicked => { root.disconnect(); }
         }
     }
@@ -626,10 +1018,10 @@ component RoleStatus inherits Rectangle {
 
 export component AppWindow inherits Window {
     title: "Indoor Cycling";
-    preferred-width: 1100px;
-    preferred-height: 820px;
-    min-width: 640px;
-    min-height: 480px;
+    preferred-width: 1220px;
+    preferred-height: 840px;
+    min-width: 860px;
+    min-height: 620px;
 
     in property <string> workout-name;
     in property <string> ride-status;
@@ -647,6 +1039,12 @@ export component AppWindow inherits Window {
     in property <bool> erg-error: false;
     in property <string> erg-status: "Connect a smart trainer";
     in property <string> workout-status: "Ready to start";
+    in property <string> current-stage-name: "Warmup";
+    in property <string> current-stage-position: "STAGE 1 OF 1";
+    in property <string> step-remaining-text: "00:00";
+    in property <int> current-target-percent: 0;
+    in property <int> timeline-active-stage-offset: 0;
+    in property <int> timeline-active-stage-width: 112;
     in property <[WorkoutStageItem]> workout-stages;
     in property <bool> can-go-previous-stage: false;
     in property <bool> can-skip-stage: true;
@@ -711,30 +1109,73 @@ export component AppWindow inherits Window {
     in-out property <int> draft-recovery-duration: 6;
     in-out property <int> draft-variation: 6;
 
-    background: #f7f8fa;
+    background: Theme.app-background;
+
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+    }
 
     VerticalBox {
         spacing: 0px;
 
         Rectangle {
-            min-height: 62px;
-            max-height: 62px;
-            background: white;
-            border-color: #d8dde3;
+            min-height: 68px;
+            max-height: 68px;
+            background: Theme.header-background;
+            border-color: Theme.border;
             border-width: 1px;
 
             HorizontalBox {
-                padding: 10px;
-                spacing: 10px;
+                padding-left: 20px;
+                padding-right: 20px;
+                padding-top: 12px;
+                padding-bottom: 12px;
+                spacing: 8px;
 
-                Text {
-                    text: "Indoor Cycling";
-                    color: #17202a;
-                    font-size: 22px;
-                    font-weight: 700;
-                    min-width: 220px;
-                    vertical-alignment: center;
+                HorizontalBox {
+                    min-width: 250px;
+                    spacing: 12px;
+
+                    Rectangle {
+                        min-width: 38px;
+                        max-width: 38px;
+                        min-height: 38px;
+                        max-height: 38px;
+                        background: Theme.accent-strong;
+                        border-radius: 10px;
+
+                        Text {
+                            text: "IC";
+                            color: #041412;
+                            font-size: 15px;
+                            font-weight: 900;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    VerticalBox {
+                        spacing: 0px;
+
+                        Text {
+                            text: "Indoor Cycling";
+                            color: Theme.text;
+                            font-size: 18px;
+                            font-weight: 800;
+                            vertical-alignment: bottom;
+                        }
+
+                        Text {
+                            text: root.workout-name;
+                            color: Theme.text-muted;
+                            font-size: 10px;
+                            overflow: elide;
+                            vertical-alignment: top;
+                        }
+                    }
                 }
+
+                Rectangle { background: transparent; horizontal-stretch: 1; }
 
                 MenuButton {
                     text: "Dashboard";
@@ -753,6 +1194,35 @@ export component AppWindow inherits Window {
                     selected: root.current-page == 2;
                     clicked => { root.current-page = 2; }
                 }
+
+                Rectangle { background: transparent; horizontal-stretch: 1; }
+
+                Rectangle {
+                    min-width: 98px;
+                    max-width: 98px;
+                    min-height: 36px;
+                    max-height: 36px;
+                    background: Theme.surface;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    border-radius: 18px;
+
+                    HorizontalBox {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 8px;
+
+                        RideStatusLed { status: root.ride-status; }
+
+                        Text {
+                            text: root.ride-status;
+                            color: Theme.text-secondary;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
             }
         }
 
@@ -762,98 +1232,59 @@ export component AppWindow inherits Window {
 
             dashboard := VerticalBox {
                 width: dashboard-scroll.viewport-width;
-                // Keep the dashboard as large as the visible viewport. Without an
-                // explicit height it remains at its content height, which leaves a
-                // blank area when the window is enlarged.
                 height: dashboard-scroll.viewport-height;
-                padding: 24px;
-                spacing: 18px;
+                min-width: 1040px;
+                padding: 18px;
+                spacing: 12px;
 
-                dashboard-header := HorizontalBox {
-                    min-width: 1304px;
-                    min-height: 116px;
-                    max-height: 116px;
-                    spacing: 0px;
-                    horizontal-stretch: 1;
+                CurrentIntervalPanel {
+                    workout-name: root.workout-name;
+                    stage-name: root.current-stage-name;
+                    stage-position: root.current-stage-position;
+                    remaining-text: root.step-remaining-text;
+                    ride-status: root.ride-status;
+                    target-watts: root.target-power-watts;
+                    target-percent: root.current-target-percent;
+                }
 
-                    HorizontalBox {
-                        min-width: 352px;
-                        max-width: 352px;
-                        spacing: 8px;
-
-                        RideStatusLed {
-                            status: root.ride-status;
-                        }
-
-                        DashboardStat {
-                            label: "Elapsed";
-                            value: root.elapsed-text;
-                        }
-
-                        DashboardStat {
-                            label: "Avg Power";
-                            value: root.average-power-text;
-                        }
-                    }
-
-                    DashboardDivider { }
-
-                    Rectangle {
-                        background: #f7f8fa;
-                        horizontal-stretch: 1;
-                    }
+                Rectangle {
+                    min-height: 54px;
+                    max-height: 54px;
+                    background: Theme.surface;
+                    border-color: Theme.border;
+                    border-width: 1px;
+                    border-radius: 12px;
 
                     HorizontalBox {
-                        min-width: 538px;
-                        max-width: 538px;
-                        spacing: 6px;
+                        padding: 6px;
+                        spacing: 10px;
 
-                        PowerMetricTile {
-                            primary-value: root.power-watts;
-                            secondary-value: root.secondary-power-watts;
-                            target-value: root.target-power-watts;
+                        VerticalBox {
+                            min-width: 180px;
+                            spacing: 0px;
+
+                            Text {
+                                text: "WORKOUT CONTROLS";
+                                color: Theme.text;
+                                font-size: 12px;
+                                font-weight: 800;
+                                vertical-alignment: bottom;
+                            }
+
+                            Text {
+                                text: "Adjust intensity and trainer control";
+                                color: Theme.text-muted;
+                                font-size: 9px;
+                                vertical-alignment: top;
+                            }
                         }
 
-                        MetricTile {
-                            label: "Target";
-                            value: root.target-power-watts;
-                            suffix: "W";
-                            accent: #b45309;
-                        }
-
-                        MetricTile {
-                            label: "Cadence";
-                            value: root.cadence-rpm;
-                            suffix: "rpm";
-                            accent: #2563eb;
-                        }
-
-                        MetricTile {
-                            label: "Heart Rate";
-                            value: root.heart-rate-bpm;
-                            suffix: "bpm";
-                            accent: #be123c;
-                        }
-                    }
-
-                    Rectangle {
-                        background: #f7f8fa;
-                        horizontal-stretch: 1;
-                    }
-
-                    DashboardDivider { }
-
-                    HorizontalBox {
-                        min-width: 412px;
-                        max-width: 412px;
-                        spacing: 12px;
-
-                        FtpControl {
+                        CompactFtpControl {
                             value: root.ftp-watts;
                             changed(value) => { root.set-ftp(value); }
                         }
 
-                        ErgControl {
+                        CompactErgControl {
                             enabled: root.erg-enabled;
                             available: root.erg-available;
                             pending: root.erg-pending;
@@ -861,56 +1292,101 @@ export component AppWindow inherits Window {
                             status: root.erg-status;
                             toggled => { root.toggle-erg-mode(); }
                         }
+
+                        Rectangle { background: transparent; horizontal-stretch: 1; }
+                    }
+                }
+
+                HorizontalBox {
+                    min-height: 116px;
+                    max-height: 116px;
+                    spacing: 10px;
+
+                    PowerMetricTile {
+                        primary-value: root.power-watts;
+                        secondary-value: root.secondary-power-watts;
+                        target-value: root.target-power-watts;
+                        feedback-active: root.ride-status == "Riding";
+                    }
+
+                    MetricTile {
+                        label: "TARGET";
+                        value: root.target-power-watts;
+                        suffix: "watts";
+                        accent: Theme.warning;
+                    }
+
+                    MetricTile {
+                        label: "CADENCE";
+                        value: root.cadence-rpm;
+                        suffix: "rpm";
+                        accent: Theme.blue;
+                    }
+
+                    MetricTile {
+                        label: "HEART RATE";
+                        value: root.heart-rate-bpm;
+                        suffix: "bpm";
+                        accent: Theme.danger;
+                    }
+
+                    DashboardStat {
+                        label: "ELAPSED";
+                        value: root.elapsed-text;
+                        suffix: "ride time";
+                    }
+
+                    DashboardStat {
+                        label: "AVG POWER";
+                        value: root.average-power-text;
+                        suffix: "this ride";
                     }
                 }
 
                 Rectangle {
-                    background: white;
-                    border-color: #d8dde3;
+                    background: Theme.surface;
+                    border-color: Theme.border;
                     border-width: 1px;
-                    border-radius: 8px;
-                    min-height: 280px;
-                    max-height: 280px;
+                    border-radius: 12px;
+                    min-height: 232px;
+                    max-height: 232px;
 
                     VerticalBox {
-                        padding: 16px;
-                        spacing: 12px;
+                        padding: 14px;
+                        spacing: 10px;
 
-                        Text {
-                            text: root.workout-status;
-                            color: #334155;
-                            font-size: 15px;
-                            font-weight: 600;
-                        }
+                        HorizontalBox {
+                            min-height: 42px;
+                            max-height: 42px;
+                            spacing: 12px;
 
-                        stage-scroll := ScrollView {
-                            // A long interval plan remains a readable timeline instead
-                            // of squeezing every stage into the available width.
-                            viewport-width: max(self.visible-width, stage-row.preferred-width);
-                            viewport-height: self.visible-height;
-                            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                            VerticalBox {
+                                spacing: 1px;
 
-                            stage-row := HorizontalBox {
-                                width: stage-scroll.viewport-width;
-                                height: stage-scroll.viewport-height;
-                                spacing: 6px;
+                                Text {
+                                    text: "WORKOUT TIMELINE";
+                                    color: Theme.text;
+                                    font-size: 13px;
+                                    font-weight: 800;
+                                }
 
-                                for stage in root.workout-stages : WorkoutStageBlock {
-                                    horizontal-stretch: stage.duration-secs;
-                                    min-width: max(112px, stage.duration-secs * 0.22px);
-                                    stage-name: stage.name;
-                                    duration-text: stage.duration-text;
-                                    target-percent: stage.target-percent;
-                                    target-watts: stage.target-watts;
-                                    progress-percent: stage.progress-percent;
-                                    active: stage.active;
-                                    completed: stage.completed;
+                                Text {
+                                    text: root.workout-status;
+                                    color: Theme.text-muted;
+                                    font-size: 11px;
+                                    overflow: elide;
                                 }
                             }
+
+                        }
+
+                        WorkoutTimeline {
+                            stages: root.workout-stages;
+                            active-stage-offset: root.timeline-active-stage-offset;
+                            active-stage-width: root.timeline-active-stage-width;
                         }
                     }
                 }
-
             }
         }
 
@@ -928,15 +1404,15 @@ export component AppWindow inherits Window {
 
                 Text {
                     text: "Bluetooth Devices";
-                    color: #17202a;
-                    font-size: 30px;
-                    font-weight: 700;
+                    color: Theme.text;
+                    font-size: 28px;
+                    font-weight: 800;
                 }
 
                 Text {
                     text: "Assign Bluetooth devices to ride data and trainer roles.";
-                    color: #53616f;
-                    font-size: 16px;
+                    color: Theme.text-secondary;
+                    font-size: 15px;
                 }
 
                 HorizontalBox {
@@ -945,23 +1421,24 @@ export component AppWindow inherits Window {
                     ActionButton {
                         text: root.device-scan-running ? "Scanning..." : "Scan for devices";
                         enabled: root.device-scan-available && !root.device-scan-running;
+                        variant: 1;
                         max-width: 190px;
                         clicked => { root.scan-devices(); }
                     }
 
                     Text {
                         text: root.device-scan-status;
-                        color: root.device-scan-error ? #be123c : #53616f;
-                        font-size: 15px;
+                        color: root.device-scan-error ? Theme.danger : Theme.text-muted;
+                        font-size: 14px;
                         vertical-alignment: center;
                     }
                 }
 
                 Text {
-                    text: "Assigned Roles";
-                    color: #17202a;
-                    font-size: 20px;
-                    font-weight: 700;
+                    text: "ASSIGNED ROLES";
+                    color: Theme.text-secondary;
+                    font-size: 13px;
+                    font-weight: 800;
                 }
 
                 HorizontalBox {
@@ -970,14 +1447,18 @@ export component AppWindow inherits Window {
                     RoleStatus {
                         label: "Primary Power";
                         value: root.live-power-watts > 0 ? root.live-power-watts + " W" : "-- W";
+                        status: root.power-connection-status;
                         connected: root.connected-power-id != "";
+                        error: root.power-connection-error;
                         disconnect => { root.disconnect-device(0); }
                     }
 
                     RoleStatus {
                         label: "Smart Trainer";
                         value: root.connected-smart-trainer-id != "" ? "Ready" : "--";
+                        status: root.smart-trainer-connection-status;
                         connected: root.connected-smart-trainer-id != "";
+                        error: root.smart-trainer-connection-error;
                         disconnect => { root.disconnect-device(4); }
                     }
 
@@ -986,7 +1467,9 @@ export component AppWindow inherits Window {
                         value: root.live-secondary-power-watts > 0
                             ? root.live-secondary-power-watts + " W"
                             : "-- W";
+                        status: root.secondary-power-connection-status;
                         connected: root.connected-secondary-power-id != "";
+                        error: root.secondary-power-connection-error;
                         disconnect => { root.disconnect-device(1); }
                     }
                 }
@@ -997,41 +1480,52 @@ export component AppWindow inherits Window {
                     RoleStatus {
                         label: "Heart Rate";
                         value: root.live-heart-rate-bpm > 0 ? root.live-heart-rate-bpm + " bpm" : "-- bpm";
+                        status: root.heart-rate-connection-status;
                         connected: root.connected-heart-rate-id != "";
+                        error: root.heart-rate-connection-error;
                         disconnect => { root.disconnect-device(2); }
                     }
 
                     RoleStatus {
                         label: "RPM";
                         value: root.live-cadence-rpm > 0 ? root.live-cadence-rpm + " rpm" : "-- rpm";
+                        status: root.cadence-connection-status;
                         connected: root.connected-cadence-id != "";
+                        error: root.cadence-connection-error;
                         disconnect => { root.disconnect-device(3); }
                     }
                 }
 
+                Text {
+                    text: "NEARBY DEVICES";
+                    color: Theme.text-secondary;
+                    font-size: 13px;
+                    font-weight: 800;
+                }
+
                 if root.discovered-devices.length == 0 : Rectangle {
-                    background: white;
-                    border-color: #d8dde3;
+                    background: Theme.surface;
+                    border-color: Theme.border;
                     border-width: 1px;
-                    border-radius: 8px;
+                    border-radius: 12px;
                     min-height: 120px;
 
                     Text {
                         text: root.device-scan-running
                             ? "Listening for nearby Bluetooth devices..."
                             : "No compatible devices found yet.";
-                        color: #53616f;
-                        font-size: 16px;
+                        color: Theme.text-muted;
+                        font-size: 15px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
 
                 for device in root.discovered-devices : Rectangle {
-                    background: white;
-                    border-color: #d8dde3;
+                    background: Theme.surface;
+                    border-color: Theme.border;
                     border-width: 1px;
-                    border-radius: 8px;
+                    border-radius: 12px;
                     min-height: 132px;
 
                     VerticalBox {
@@ -1046,21 +1540,21 @@ export component AppWindow inherits Window {
 
                                 Text {
                                     text: device.name;
-                                    color: #17202a;
+                                    color: Theme.text;
                                     font-size: 18px;
-                                    font-weight: 700;
+                                    font-weight: 800;
                                 }
 
                                 Text {
                                     text: device.capabilities;
-                                    color: #53616f;
+                                    color: Theme.text-secondary;
                                     font-size: 14px;
                                 }
                             }
 
                             Text {
                                 text: device.signal;
-                                color: #53616f;
+                                color: Theme.text-muted;
                                 font-size: 14px;
                                 horizontal-alignment: right;
                                 vertical-alignment: center;
@@ -1168,15 +1662,15 @@ export component AppWindow inherits Window {
 
                 Text {
                     text: "Workout Builder";
-                    color: #17202a;
-                    font-size: 30px;
-                    font-weight: 700;
+                    color: Theme.text;
+                    font-size: 28px;
+                    font-weight: 800;
                 }
 
                 Text {
                     text: "Build a varied interval session around your FTP. A warmup and cooldown are always included.";
-                    color: #53616f;
-                    font-size: 16px;
+                    color: Theme.text-secondary;
+                    font-size: 15px;
                 }
 
                 FtpControl {
@@ -1185,10 +1679,10 @@ export component AppWindow inherits Window {
                 }
 
                 Rectangle {
-                    background: white;
-                    border-color: #d8dde3;
+                    background: Theme.surface;
+                    border-color: Theme.border;
                     border-width: 1px;
-                    border-radius: 8px;
+                    border-radius: 12px;
 
                     VerticalBox {
                         padding: 20px;
@@ -1196,7 +1690,7 @@ export component AppWindow inherits Window {
 
                         VerticalBox {
                             spacing: 8px;
-                            Text { text: "Workout type"; color: #334155; font-size: 15px; font-weight: 700; }
+                            Text { text: "WORKOUT TYPE"; color: Theme.text-secondary; font-size: 12px; font-weight: 800; }
                             HorizontalBox {
                                 spacing: 6px;
                                 WorkoutTypeButton { text: "Recovery"; selected: root.draft-workout-type == 0; clicked => { root.draft-workout-type = 0; root.builder-settings-changed(root.draft-length-minutes, root.draft-workout-type, root.draft-effort-intensity, root.draft-recovery-intensity, root.draft-effort-duration, root.draft-recovery-duration, root.draft-variation); } }
@@ -1274,6 +1768,7 @@ export component AppWindow inherits Window {
 
                         ActionButton {
                             text: "Randomize and activate workout";
+                            variant: 1;
                             max-width: 290px;
                             clicked => {
                                 root.randomize-workout(
@@ -1290,13 +1785,18 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                Text { text: "Active workout: " + root.workout-name; color: #17202a; font-size: 20px; font-weight: 700; }
+                Text {
+                    text: "ACTIVE WORKOUT  •  " + root.workout-name;
+                    color: Theme.text;
+                    font-size: 17px;
+                    font-weight: 800;
+                }
 
                 Rectangle {
-                    background: white;
-                    border-color: #d8dde3;
+                    background: Theme.surface;
+                    border-color: Theme.border;
                     border-width: 1px;
-                    border-radius: 8px;
+                    border-radius: 12px;
                     min-height: 150px;
 
                     preview-scroll := ScrollView {
@@ -1327,40 +1827,56 @@ export component AppWindow inherits Window {
         }
 
         if root.current-page == 0 : Rectangle {
-            min-height: 64px;
-            max-height: 64px;
-            background: #f7f8fa;
-            border-color: #d8dde3;
+            min-height: 72px;
+            max-height: 72px;
+            background: Theme.header-background;
+            border-color: Theme.border;
             border-width: 1px;
 
             HorizontalBox {
-                padding: 10px;
-                spacing: 12px;
+                padding-left: 18px;
+                padding-right: 18px;
+                padding-top: 14px;
+                padding-bottom: 14px;
+                spacing: 10px;
 
                 ActionButton {
-                    text: "Start";
+                    text: root.ride-status == "Paused" ? "Resume ride"
+                        : root.ride-status == "Riding" ? "Riding"
+                        : root.ride-status == "Finished" ? "Ride complete" : "Start ride";
+                    variant: 1;
+                    enabled: root.ride-status != "Riding" && root.ride-status != "Finished";
+                    max-width: 150px;
                     clicked => { root.start-ride(); }
                 }
 
                 ActionButton {
                     text: "Pause";
+                    enabled: root.ride-status == "Riding";
+                    max-width: 120px;
                     clicked => { root.pause-ride(); }
                 }
 
                 ActionButton {
                     text: "Finish";
+                    variant: 2;
+                    max-width: 120px;
                     clicked => { root.finish-ride(); }
                 }
 
+                Rectangle { background: transparent; horizontal-stretch: 1; }
+
                 ActionButton {
-                    text: "Previous Stage";
+                    text: "Previous stage";
                     enabled: root.can-go-previous-stage;
+                    max-width: 150px;
                     clicked => { root.previous-stage(); }
                 }
 
                 ActionButton {
-                    text: "Skip Stage";
+                    text: "Skip stage";
                     enabled: root.can-skip-stage;
+                    max-width: 140px;
                     clicked => { root.skip-stage(); }
                 }
             }
@@ -1370,7 +1886,7 @@ export component AppWindow inherits Window {
     if root.finish-dialog-open : Rectangle {
         width: root.width;
         height: root.height;
-        background: #17202a88;
+        background: #020408cc;
 
         TouchArea { }
 
@@ -1380,10 +1896,10 @@ export component AppWindow inherits Window {
             max-height: 292px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: white;
-            border-color: #c7ced6;
+            background: Theme.surface-raised;
+            border-color: Theme.border-strong;
             border-width: 1px;
-            border-radius: 8px;
+            border-radius: 14px;
 
             VerticalBox {
                 padding: 22px;
@@ -1391,21 +1907,21 @@ export component AppWindow inherits Window {
 
                 Text {
                     text: "Finish workout?";
-                    color: #17202a;
+                    color: Theme.text;
                     font-size: 24px;
                     font-weight: 800;
                 }
 
                 Text {
                     text: "Save a FIT activity file for upload, discard this ride, or resume where you left off.";
-                    color: #53616f;
+                    color: Theme.text-secondary;
                     font-size: 15px;
                     wrap: word-wrap;
                 }
 
                 Text {
                     text: root.finish-error;
-                    color: #be123c;
+                    color: Theme.danger;
                     font-size: 13px;
                     min-height: root.finish-error == "" ? 0px : 20px;
                     visible: root.finish-error != "";
@@ -1427,11 +1943,13 @@ export component AppWindow inherits Window {
 
                     ActionButton {
                         text: "Finish and discard";
+                        variant: 2;
                         clicked => { root.finish-and-discard(); }
                     }
 
                     ActionButton {
                         text: "Finish and save";
+                        variant: 1;
                         clicked => { root.finish-and-save(); }
                     }
                 }
