@@ -24,6 +24,7 @@ const CONFIGURATION_VERSION: u8 = 3;
 struct AppState {
     recorder: RideRecorder,
     workout: WorkoutEngine,
+    workout_stages: Rc<VecModel<WorkoutStageItem>>,
     trainer: SimulatedTrainer,
     ftp_watts: u16,
     workout_builder: WorkoutBuilderConfiguration,
@@ -84,6 +85,7 @@ impl AppState {
         Self {
             recorder: RideRecorder::new(),
             workout: WorkoutEngine::new(workout),
+            workout_stages: Rc::new(VecModel::default()),
             trainer,
             ftp_watts,
             workout_builder,
@@ -154,6 +156,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let bluetooth_service_handle = bluetooth_service.as_ref().ok().cloned();
 
     window.set_discovered_devices(ModelRc::from(Rc::clone(&discovered_devices)));
+    window.set_workout_stages(ModelRc::from(Rc::clone(&state.borrow().workout_stages)));
     if let Some(window_size) = state.borrow().window.as_ref().filter(|size| {
         size.logical_width.is_finite()
             && size.logical_height.is_finite()
@@ -1139,6 +1142,9 @@ fn clear_erg_state(state: &mut AppState) {
 
 fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
     let workout = state.workout.workout();
+    window.set_timeline_content_width(
+        i32::try_from(timeline_content_width_px(workout)).unwrap_or(i32::MAX),
+    );
     let (active_index, active_elapsed_secs) = match phase {
         WorkoutPhase::Active {
             step_index,
@@ -1167,8 +1173,9 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
 
             WorkoutStageItem {
                 name: step.name.clone().into(),
-                duration_secs: i32::try_from(step.duration_secs).unwrap_or(i32::MAX),
                 duration_text: format_duration(step.duration_secs).into(),
+                timeline_width_px: i32::try_from(timeline_stage_width_px(step.duration_secs))
+                    .unwrap_or(i32::MAX),
                 target_percent: i32::from(step.target_ftp_percent),
                 target_watts: i32::from(step.target_power_watts(state.ftp_watts)),
                 progress_percent,
@@ -1177,7 +1184,7 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
             }
         })
         .collect::<Vec<_>>();
-    window.set_workout_stages(ModelRc::from(Rc::new(VecModel::from(stages))));
+    sync_workout_stage_model(&state.workout_stages, stages);
 
     match phase {
         WorkoutPhase::NotStarted => {
@@ -1275,21 +1282,40 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
     }
 }
 
+fn sync_workout_stage_model(model: &VecModel<WorkoutStageItem>, stages: Vec<WorkoutStageItem>) {
+    if model.row_count() != stages.len() {
+        model.set_vec(stages);
+        return;
+    }
+
+    for (index, stage) in stages.into_iter().enumerate() {
+        let unchanged = model
+            .row_data(index)
+            .is_some_and(|current| workout_stage_items_equal(&current, &stage));
+        if !unchanged {
+            model.set_row_data(index, stage);
+        }
+    }
+}
+
+fn workout_stage_items_equal(left: &WorkoutStageItem, right: &WorkoutStageItem) -> bool {
+    left.name == right.name
+        && left.duration_text == right.duration_text
+        && left.timeline_width_px == right.timeline_width_px
+        && left.target_percent == right.target_percent
+        && left.target_watts == right.target_watts
+        && left.progress_percent == right.progress_percent
+        && left.active == right.active
+        && left.completed == right.completed
+}
+
 fn set_timeline_stage_position(window: &AppWindow, workout: &Workout, stage_index: Option<usize>) {
     let Some(stage_index) = stage_index else {
-        window.set_timeline_active_stage_width(112);
         window.set_timeline_active_stage_offset(0);
         return;
     };
 
     let offset_px = timeline_stage_offset_px(workout, stage_index);
-    let width_px = workout
-        .steps
-        .get(stage_index)
-        .map(|step| timeline_stage_width_px(step.duration_secs))
-        .unwrap_or(112);
-
-    window.set_timeline_active_stage_width(i32::try_from(width_px).unwrap_or(i32::MAX));
     window.set_timeline_active_stage_offset(i32::try_from(offset_px).unwrap_or(i32::MAX));
 }
 
@@ -1305,12 +1331,22 @@ fn timeline_stage_offset_px(workout: &Workout, stage_index: usize) -> u64 {
         })
 }
 
+fn timeline_content_width_px(workout: &Workout) -> u64 {
+    let stage_widths = workout.steps.iter().fold(0_u64, |width, step| {
+        width.saturating_add(timeline_stage_width_px(step.duration_secs))
+    });
+    let spacing = u64::try_from(workout.steps.len().saturating_sub(1))
+        .unwrap_or(u64::MAX)
+        .saturating_mul(8);
+    stage_widths.saturating_add(spacing)
+}
+
 fn timeline_stage_width_px(duration_secs: u64) -> u64 {
     duration_secs
         .saturating_mul(22)
         .saturating_add(99)
         .saturating_div(100)
-        .max(112)
+        .max(144)
 }
 
 fn format_duration(total_secs: u64) -> String {
@@ -1507,8 +1543,9 @@ mod tests {
             ],
         );
 
-        assert_eq!(timeline_stage_width_px(60), 112);
+        assert_eq!(timeline_stage_width_px(60), 144);
         assert_eq!(timeline_stage_width_px(900), 198);
-        assert_eq!(timeline_stage_offset_px(&workout, 2), 326);
+        assert_eq!(timeline_stage_offset_px(&workout, 2), 358);
+        assert_eq!(timeline_content_width_px(&workout), 502);
     }
 }

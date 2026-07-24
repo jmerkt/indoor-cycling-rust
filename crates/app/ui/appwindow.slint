@@ -34,8 +34,8 @@ export struct DeviceListItem {
 
 export struct WorkoutStageItem {
     name: string,
-    duration-secs: int,
     duration-text: string,
+    timeline-width-px: int,
     target-percent: int,
     target-watts: int,
     progress-percent: int,
@@ -831,7 +831,7 @@ component WorkoutStageBlock inherits Rectangle {
     in property <bool> active;
     in property <bool> completed;
 
-    min-width: 112px;
+    min-width: 144px;
     min-height: 118px;
     // FTP-relative training zones: recovery, endurance (Zone 2), tempo,
     // sweet spot, threshold, VO2 max, and anaerobic capacity.
@@ -916,20 +916,16 @@ component WorkoutStageBlock inherits Rectangle {
 component WorkoutTimeline inherits Rectangle {
     in property <[WorkoutStageItem]> stages;
     in property <int> active-stage-offset;
-    in property <int> active-stage-width;
+    in property <int> content-width;
 
     function reveal-active-stage() {
         let stage-left = root.active-stage-offset * 1px;
-        let stage-right = stage-left + root.active-stage-width * 1px;
-        let visible-left = timeline-scroll.viewport-x;
-        let visible-right = visible-left + timeline-scroll.visible-width;
         let maximum-scroll = max(0px, timeline-scroll.viewport-width - timeline-scroll.visible-width);
 
-        if stage-left < visible-left {
-            timeline-scroll.viewport-x = max(0px, stage-left - 8px);
-        } else if stage-right > visible-right {
-            timeline-scroll.viewport-x = min(maximum-scroll, stage-right - timeline-scroll.visible-width + 8px);
-        }
+        // Flickable positions its content with a negative translation. Align
+        // every newly active stage near the left edge instead of waiting until
+        // it has moved completely outside the visible area.
+        timeline-scroll.viewport-x = -min(maximum-scroll, max(0px, stage-left - 8px));
     }
 
     changed active-stage-offset => {
@@ -937,7 +933,7 @@ component WorkoutTimeline inherits Rectangle {
     }
 
     timeline-scroll := ScrollView {
-        viewport-width: max(self.visible-width, stage-row.preferred-width);
+        viewport-width: max(self.visible-width, root.content-width * 1px);
         viewport-height: self.visible-height;
         vertical-scrollbar-policy: ScrollBarPolicy.always-off;
 
@@ -947,8 +943,9 @@ component WorkoutTimeline inherits Rectangle {
             spacing: 8px;
 
             for stage in root.stages : WorkoutStageBlock {
-                horizontal-stretch: stage.duration-secs;
-                min-width: max(112px, stage.duration-secs * 0.22px);
+                min-width: stage.timeline-width-px * 1px;
+                max-width: stage.timeline-width-px * 1px;
+                horizontal-stretch: 0;
                 stage-name: stage.name;
                 duration-text: stage.duration-text;
                 target-percent: stage.target-percent;
@@ -1044,7 +1041,7 @@ export component AppWindow inherits Window {
     in property <string> step-remaining-text: "00:00";
     in property <int> current-target-percent: 0;
     in property <int> timeline-active-stage-offset: 0;
-    in property <int> timeline-active-stage-width: 112;
+    in property <int> timeline-content-width: 0;
     in property <[WorkoutStageItem]> workout-stages;
     in property <bool> can-go-previous-stage: false;
     in property <bool> can-skip-stage: true;
@@ -1383,7 +1380,7 @@ export component AppWindow inherits Window {
                         WorkoutTimeline {
                             stages: root.workout-stages;
                             active-stage-offset: root.timeline-active-stage-offset;
-                            active-stage-width: root.timeline-active-stage-width;
+                            content-width: root.timeline-content-width;
                         }
                     }
                 }
@@ -1800,7 +1797,7 @@ export component AppWindow inherits Window {
                     min-height: 150px;
 
                     preview-scroll := ScrollView {
-                        viewport-width: max(self.visible-width, preview-row.preferred-width);
+                        viewport-width: max(self.visible-width, root.timeline-content-width * 1px + 32px);
                         viewport-height: self.visible-height;
                         vertical-scrollbar-policy: ScrollBarPolicy.always-off;
 
@@ -1810,8 +1807,9 @@ export component AppWindow inherits Window {
                             padding: 16px;
                             spacing: 8px;
                             for stage in root.workout-stages : WorkoutStageBlock {
-                                horizontal-stretch: stage.duration-secs;
-                                min-width: max(112px, stage.duration-secs * 0.22px);
+                                min-width: stage.timeline-width-px * 1px;
+                                max-width: stage.timeline-width-px * 1px;
+                                horizontal-stretch: 0;
                                 stage-name: stage.name;
                                 duration-text: stage.duration-text;
                                 target-percent: stage.target-percent;
