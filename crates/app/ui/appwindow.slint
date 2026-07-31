@@ -353,6 +353,85 @@ component CompactFtpControl inherits Rectangle {
     }
 }
 
+component CompactScaleControl inherits Rectangle {
+    in property <int> value: 100;
+    callback changed(int);
+
+    changed value => {
+        scale-input.text = root.value + "";
+    }
+
+    function apply-value(value: int) {
+        let bounded-value = max(50, min(150, value));
+        scale-input.text = bounded-value + "";
+        root.changed(bounded-value);
+    }
+
+    min-width: 220px;
+    max-width: 220px;
+    min-height: 42px;
+    max-height: 42px;
+    background: Theme.surface-raised;
+    border-color: root.value == 100 ? Theme.border-strong : Theme.accent-strong;
+    border-width: 1px;
+    border-radius: 8px;
+
+    HorizontalBox {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 5px;
+
+        Text {
+            text: "SCALE";
+            color: root.value == 100 ? Theme.text-secondary : Theme.accent;
+            font-size: 11px;
+            font-weight: 800;
+            min-width: 42px;
+            vertical-alignment: center;
+        }
+
+        InlineFtpStepButton {
+            text: "−";
+            enabled: root.value > 50;
+            clicked => { root.apply-value(root.value - 1); }
+        }
+
+        scale-input := TextInput {
+            text: root.value + "";
+            color: Theme.text;
+            font-size: 16px;
+            font-weight: 800;
+            min-width: 46px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            accepted => {
+                if self.text.is-float() {
+                    root.apply-value(round(self.text.to-float()));
+                } else {
+                    self.text = root.value + "";
+                }
+                self.clear-focus();
+            }
+        }
+
+        Text {
+            text: "%";
+            color: Theme.text-muted;
+            font-size: 11px;
+            min-width: 14px;
+            vertical-alignment: center;
+        }
+
+        InlineFtpStepButton {
+            text: "+";
+            enabled: root.value < 150;
+            clicked => { root.apply-value(root.value + 1); }
+        }
+    }
+}
+
 component BuilderSliderRow inherits Rectangle {
     in property <string> label;
     in property <int> value;
@@ -917,6 +996,7 @@ component WorkoutTimeline inherits Rectangle {
     in property <[WorkoutStageItem]> stages;
     in property <int> active-stage-offset;
     in property <int> content-width;
+    in property <int> scale-percent: 100;
 
     function reveal-active-stage() {
         let stage-left = root.active-stage-offset * 1px;
@@ -949,7 +1029,7 @@ component WorkoutTimeline inherits Rectangle {
                 stage-name: stage.name;
                 duration-text: stage.duration-text;
                 target-percent: stage.target-percent;
-                target-watts: stage.target-watts;
+                target-watts: round(stage.target-watts * root.scale-percent / 100);
                 progress-percent: stage.progress-percent;
                 active: stage.active;
                 completed: stage.completed;
@@ -1030,6 +1110,7 @@ export component AppWindow inherits Window {
     in property <int> heart-rate-bpm: 0;
     in property <string> average-power-text: "0 W";
     in property <int> ftp-watts: 200;
+    in property <int> workout-scale-percent: 100;
     in property <bool> erg-enabled: false;
     in property <bool> erg-available: false;
     in property <bool> erg-pending: false;
@@ -1088,6 +1169,7 @@ export component AppWindow inherits Window {
     callback finish-and-discard();
     callback finish-and-save();
     callback set-ftp(int);
+    callback set-workout-scale(int);
     callback toggle-erg-mode();
     callback previous-stage();
     callback skip-stage();
@@ -1269,7 +1351,7 @@ export component AppWindow inherits Window {
                             }
 
                             Text {
-                                text: "Adjust intensity and trainer control";
+                                text: "Adjust baseline, target scale and trainer";
                                 color: Theme.text-muted;
                                 font-size: 9px;
                                 vertical-alignment: top;
@@ -1279,6 +1361,11 @@ export component AppWindow inherits Window {
                         CompactFtpControl {
                             value: root.ftp-watts;
                             changed(value) => { root.set-ftp(value); }
+                        }
+
+                        CompactScaleControl {
+                            value: root.workout-scale-percent;
+                            changed(value) => { root.set-workout-scale(value); }
                         }
 
                         CompactErgControl {
@@ -1381,6 +1468,7 @@ export component AppWindow inherits Window {
                             stages: root.workout-stages;
                             active-stage-offset: root.timeline-active-stage-offset;
                             content-width: root.timeline-content-width;
+                            scale-percent: root.workout-scale-percent;
                         }
                     }
                 }

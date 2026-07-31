@@ -19,6 +19,9 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 slint::include_modules!();
 
 const DEFAULT_FTP_WATTS: u16 = 200;
+const DEFAULT_WORKOUT_SCALE_PERCENT: u16 = 100;
+const MIN_WORKOUT_SCALE_PERCENT: u16 = 50;
+const MAX_WORKOUT_SCALE_PERCENT: u16 = 150;
 const CONFIGURATION_VERSION: u8 = 3;
 
 struct AppState {
@@ -27,6 +30,7 @@ struct AppState {
     workout_stages: Rc<VecModel<WorkoutStageItem>>,
     trainer: SimulatedTrainer,
     ftp_watts: u16,
+    workout_scale_percent: u16,
     workout_builder: WorkoutBuilderConfiguration,
     ride_file_store: Option<RideFileStore>,
     window: Option<WindowConfiguration>,
@@ -88,6 +92,7 @@ impl AppState {
             workout_stages: Rc::new(VecModel::default()),
             trainer,
             ftp_watts,
+            workout_scale_percent: DEFAULT_WORKOUT_SCALE_PERCENT,
             workout_builder,
             ride_file_store: RideFileStore::for_current_user().ok(),
             window: configuration.and_then(|configuration| configuration.window.clone()),
@@ -205,6 +210,25 @@ fn main() -> Result<(), slint::PlatformError> {
                 bluetooth_service.shutdown();
             }
             slint::CloseRequestResponse::HideWindow
+        });
+    }
+
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let bluetooth_service = bluetooth_service_handle.clone();
+        window.on_set_workout_scale(move |scale_percent| {
+            let mut state = state.borrow_mut();
+            state.workout_scale_percent = u16::try_from(scale_percent.clamp(
+                i32::from(MIN_WORKOUT_SCALE_PERCENT),
+                i32::from(MAX_WORKOUT_SCALE_PERCENT),
+            ))
+            .unwrap_or(DEFAULT_WORKOUT_SCALE_PERCENT);
+            apply_current_target(&mut state);
+            sync_erg_target(&mut state, bluetooth_service.as_deref());
+            if let Some(window) = window_weak.upgrade() {
+                render(&window, &state);
+            }
         });
     }
 
@@ -972,10 +996,11 @@ fn tick(
     let phase = state.workout.tick();
     match phase {
         WorkoutPhase::Active { step, .. } => {
-            let ftp_watts = state.ftp_watts;
-            let _ = state
-                .trainer
-                .set_target_power(step.target_power_watts(ftp_watts));
+            let target_power_watts = scaled_target_power(
+                step.target_power_watts(state.ftp_watts),
+                state.workout_scale_percent,
+            );
+            let _ = state.trainer.set_target_power(target_power_watts);
             sync_erg_target(&mut state, bluetooth_service);
         }
         WorkoutPhase::Finished => {
@@ -1012,6 +1037,7 @@ fn render(window: &AppWindow, state: &AppState) {
 
     window.set_workout_name(state.workout.workout().name.clone().into());
     window.set_ftp_watts(i32::from(state.ftp_watts));
+    window.set_workout_scale_percent(i32::from(state.workout_scale_percent));
     window.set_erg_enabled(state.erg_enabled);
     window.set_erg_available(
         state.smart_trainer_connected
@@ -1080,15 +1106,23 @@ fn apply_current_target(state: &mut AppState) {
 
 fn current_target_power(state: &AppState) -> Option<u16> {
     match state.workout.phase() {
-        WorkoutPhase::Active { step, .. } => Some(step.target_power_watts(state.ftp_watts)),
-        WorkoutPhase::NotStarted => state
-            .workout
-            .workout()
-            .steps
-            .first()
-            .map(|step| step.target_power_watts(state.ftp_watts)),
+        WorkoutPhase::Active { step, .. } => Some(scaled_target_power(
+            step.target_power_watts(state.ftp_watts),
+            state.workout_scale_percent,
+        )),
+        WorkoutPhase::NotStarted => state.workout.workout().steps.first().map(|step| {
+            scaled_target_power(
+                step.target_power_watts(state.ftp_watts),
+                state.workout_scale_percent,
+            )
+        }),
         WorkoutPhase::Finished => None,
     }
+}
+
+fn scaled_target_power(target_power_watts: u16, scale_percent: u16) -> u16 {
+    let scaled = u32::from(target_power_watts) * u32::from(scale_percent);
+    u16::try_from((scaled + 50) / 100).unwrap_or(u16::MAX)
 }
 
 fn sync_erg_target(state: &mut AppState, bluetooth_service: Option<&BluetoothDeviceService>) {
@@ -1192,7 +1226,12 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
             set_timeline_stage_position(window, workout, first_step.map(|_| 0));
             window.set_target_power_watts(
                 first_step
-                    .map(|step| i32::from(step.target_power_watts(state.ftp_watts)))
+                    .map(|step| {
+                        i32::from(scaled_target_power(
+                            step.target_power_watts(state.ftp_watts),
+                            state.workout_scale_percent,
+                        ))
+                    })
                     .unwrap_or_default(),
             );
             window.set_current_stage_name(
@@ -1226,7 +1265,10 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
                         format!(
                             "Ready: {} at {} W ({}% FTP)",
                             step.name,
-                            step.target_power_watts(state.ftp_watts),
+                            scaled_target_power(
+                                step.target_power_watts(state.ftp_watts),
+                                state.workout_scale_percent,
+                            ),
                             step.target_ftp_percent
                         )
                     })
@@ -1243,7 +1285,10 @@ fn render_workout(window: &AppWindow, state: &AppState, phase: &WorkoutPhase) {
         } => {
             set_timeline_stage_position(window, workout, Some(*step_index));
             let remaining_secs = step.duration_secs.saturating_sub(*step_elapsed_secs);
-            let target_watts = step.target_power_watts(state.ftp_watts);
+            let target_watts = scaled_target_power(
+                step.target_power_watts(state.ftp_watts),
+                state.workout_scale_percent,
+            );
             window.set_target_power_watts(i32::from(target_watts));
             window.set_current_stage_name(step.name.clone().into());
             window.set_current_stage_position(
@@ -1530,6 +1575,35 @@ mod tests {
 
         assert_eq!(current_target_power(&state), Some(300));
         assert!(state.running);
+    }
+
+    #[test]
+    fn workout_scale_adjusts_the_runtime_target() {
+        let mut state = AppState::new(None);
+        state.replace_workout(Workout::new(
+            "Scale",
+            vec![WorkoutStep::new("Effort", 60, 120)],
+        ));
+        state.running = true;
+        state.workout.start();
+
+        state.workout_scale_percent = 101;
+
+        assert_eq!(state.ftp_watts, DEFAULT_FTP_WATTS);
+        assert_eq!(current_target_power(&state), Some(242));
+    }
+
+    #[test]
+    fn workout_scale_is_not_restored_from_configuration() {
+        let mut state = AppState::new(None);
+        state.workout_scale_percent = 125;
+
+        let restored = AppState::new(Some(&state.configuration()));
+
+        assert_eq!(
+            restored.workout_scale_percent,
+            DEFAULT_WORKOUT_SCALE_PERCENT
+        );
     }
 
     #[test]
