@@ -503,11 +503,14 @@ component CompactErgControl inherits Rectangle {
     border-radius: 8px;
 
     HorizontalBox {
+        padding-top: 4px;
+        padding-bottom: 4px;
         padding-left: 12px;
         padding-right: 8px;
         spacing: 8px;
 
         VerticalBox {
+            padding: 0px;
             spacing: 0px;
 
             Text {
@@ -902,6 +905,7 @@ component CurrentIntervalPanel inherits Rectangle {
 }
 
 component WorkoutStageBlock inherits Rectangle {
+    in property <bool> compact: false;
     in property <string> stage-name;
     in property <string> duration-text;
     in property <int> target-percent;
@@ -911,7 +915,7 @@ component WorkoutStageBlock inherits Rectangle {
     in property <bool> completed;
 
     min-width: 144px;
-    min-height: 118px;
+    min-height: root.compact ? 70px : 118px;
     // FTP-relative training zones: recovery, endurance (Zone 2), tempo,
     // sweet spot, threshold, VO2 max, and anaerobic capacity.
     opacity: root.completed ? 0.58 : 1;
@@ -931,13 +935,13 @@ component WorkoutStageBlock inherits Rectangle {
     border-radius: 9px;
 
     VerticalBox {
-        padding: 12px;
-        spacing: 5px;
+        padding: root.compact ? 7px : 12px;
+        spacing: root.compact ? 2px : 5px;
 
         Text {
             text: root.stage-name;
             color: Theme.text;
-            font-size: 15px;
+            font-size: root.compact ? 12px : 15px;
             font-weight: 700;
             horizontal-alignment: center;
             overflow: elide;
@@ -946,7 +950,7 @@ component WorkoutStageBlock inherits Rectangle {
         Text {
             text: root.target-watts + " W";
             color: root.active ? Theme.text : Theme.text-secondary;
-            font-size: 22px;
+            font-size: root.compact ? 18px : 22px;
             font-weight: 800;
             horizontal-alignment: center;
         }
@@ -958,7 +962,7 @@ component WorkoutStageBlock inherits Rectangle {
             horizontal-alignment: center;
         }
 
-        Text {
+        if !root.compact : Text {
             text: root.target-percent <= 55 ? "Recovery"
                 : root.target-percent <= 75 ? "Zone 2"
                 : root.target-percent <= 87 ? "Tempo"
@@ -993,6 +997,7 @@ component WorkoutStageBlock inherits Rectangle {
 }
 
 component WorkoutTimeline inherits Rectangle {
+    in property <bool> compact: false;
     in property <[WorkoutStageItem]> stages;
     in property <int> active-stage-offset;
     in property <int> content-width;
@@ -1008,6 +1013,10 @@ component WorkoutTimeline inherits Rectangle {
         timeline-scroll.viewport-x = -min(maximum-scroll, max(0px, stage-left - 8px));
     }
 
+    init => { root.reveal-active-stage(); }
+
+    changed width => { root.reveal-active-stage(); }
+
     changed active-stage-offset => {
         root.reveal-active-stage();
     }
@@ -1018,11 +1027,13 @@ component WorkoutTimeline inherits Rectangle {
         vertical-scrollbar-policy: ScrollBarPolicy.always-off;
 
         stage-row := HorizontalBox {
+            padding: 0px;
             width: timeline-scroll.viewport-width;
             height: timeline-scroll.viewport-height;
             spacing: 8px;
 
             for stage in root.stages : WorkoutStageBlock {
+                compact: root.compact;
                 min-width: stage.timeline-width-px * 1px;
                 max-width: stage.timeline-width-px * 1px;
                 horizontal-stretch: 0;
@@ -1096,9 +1107,13 @@ component RoleStatus inherits Rectangle {
 export component AppWindow inherits Window {
     title: "Indoor Cycling";
     preferred-width: 1220px;
-    preferred-height: 840px;
-    min-width: 860px;
-    min-height: 620px;
+    preferred-height: root.compact-active ? 340px : 840px;
+    min-width: root.compact-active ? 1040px : 860px;
+    min-height: root.compact-active ? 340px : 620px;
+
+    in-out property <bool> compact-dashboard: false;
+    private property <bool> compact-active: root.compact-dashboard && root.current-page == 0;
+    callback set-dashboard-mode(bool);
 
     in property <string> workout-name;
     in property <string> ride-status;
@@ -1197,7 +1212,7 @@ export component AppWindow inherits Window {
     VerticalBox {
         spacing: 0px;
 
-        Rectangle {
+        if !root.compact-active : Rectangle {
             min-height: 68px;
             max-height: 68px;
             background: Theme.header-background;
@@ -1305,7 +1320,141 @@ export component AppWindow inherits Window {
             }
         }
 
-        if root.current-page == 0 : dashboard-scroll := ScrollView {
+        if root.compact-active : VerticalBox {
+            padding: 0px;
+            spacing: 6px;
+
+            HorizontalBox {
+                padding: 0px;
+                min-height: 36px;
+                max-height: 36px;
+                spacing: 12px;
+                RideStatusLed { status: root.ride-status; }
+                Text {
+                    text: root.ride-status + "  ·  " + root.current-stage-position + "  ·  " + root.current-stage-name;
+                    color: Theme.text;
+                    font-size: 14px;
+                    font-weight: 700;
+                    overflow: elide;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "Elapsed " + root.elapsed-text + "   ·   Avg " + root.average-power-text;
+                    color: Theme.text-secondary;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
+                ActionButton {
+                    text: "Full dashboard";
+                    min-height: 36px;
+                    max-height: 36px;
+                    max-width: 140px;
+                    clicked => { root.set-dashboard-mode(false); }
+                }
+            }
+
+            HorizontalBox {
+                padding: 0px;
+                min-height: 116px;
+                max-height: 116px;
+                spacing: 8px;
+                PowerMetricTile {
+                    primary-value: root.power-watts;
+                    secondary-value: root.secondary-power-watts;
+                    target-value: root.target-power-watts;
+                    feedback-active: root.ride-status == "Riding";
+                }
+                MetricTile {
+                    label: "TARGET";
+                    value: root.target-power-watts;
+                    suffix: root.current-target-percent + "% FTP · watts";
+                    accent: Theme.warning;
+                }
+                MetricTile {
+                    label: "CADENCE";
+                    value: root.cadence-rpm;
+                    suffix: "rpm";
+                    accent: Theme.blue;
+                }
+                MetricTile {
+                    label: "HEART RATE";
+                    value: root.heart-rate-bpm;
+                    suffix: "bpm";
+                    accent: Theme.danger;
+                }
+                DashboardStat {
+                    label: "STEP REMAINING";
+                    value: root.step-remaining-text;
+                    suffix: root.ride-status == "Paused" ? "workout paused" : "this stage";
+                }
+            }
+
+            WorkoutTimeline {
+                min-height: 82px;
+                compact: true;
+                stages: root.workout-stages;
+                active-stage-offset: root.timeline-active-stage-offset;
+                content-width: root.timeline-content-width;
+                scale-percent: root.workout-scale-percent;
+            }
+
+            HorizontalBox {
+                padding: 0px;
+                min-height: 44px;
+                max-height: 44px;
+                spacing: 6px;
+                ActionButton {
+                    text: root.ride-status == "Riding" ? "Pause"
+                        : root.ride-status == "Paused" ? "Resume"
+                        : root.ride-status == "Finished" ? "Complete" : "Start ride";
+                    variant: 1;
+                    enabled: root.ride-status != "Finished";
+                    min-width: 94px;
+                    max-width: 110px;
+                    clicked => {
+                        if root.ride-status == "Riding" { root.pause-ride(); }
+                        else { root.start-ride(); }
+                    }
+                }
+                ActionButton {
+                    text: "Finish";
+                    variant: 2;
+                    min-width: 76px;
+                    max-width: 90px;
+                    clicked => { root.finish-ride(); }
+                }
+                ActionButton {
+                    text: "Previous";
+                    enabled: root.can-go-previous-stage;
+                    min-width: 84px;
+                    max-width: 100px;
+                    clicked => { root.previous-stage(); }
+                }
+                ActionButton {
+                    text: "Skip stage";
+                    enabled: root.can-skip-stage;
+                    min-width: 94px;
+                    max-width: 110px;
+                    clicked => { root.skip-stage(); }
+                }
+                Rectangle { horizontal-stretch: 1; background: transparent; }
+                CompactScaleControl {
+                    value: root.workout-scale-percent;
+                    changed(value) => { root.set-workout-scale(value); }
+                }
+                CompactErgControl {
+                    enabled: root.erg-enabled;
+                    available: root.erg-available;
+                    pending: root.erg-pending;
+                    error: root.erg-error;
+                    status: root.erg-status;
+                    toggled => { root.toggle-erg-mode(); }
+                }
+            }
+        }
+
+        if root.current-page == 0 && !root.compact-active : dashboard-scroll := ScrollView {
             viewport-width: max(self.visible-width, dashboard.preferred-width);
             viewport-height: max(self.visible-height, dashboard.preferred-height);
 
@@ -1912,7 +2061,7 @@ export component AppWindow inherits Window {
             }
         }
 
-        if root.current-page == 0 : Rectangle {
+        if root.current-page == 0 && !root.compact-active : Rectangle {
             min-height: 72px;
             max-height: 72px;
             background: Theme.header-background;
@@ -1953,6 +2102,12 @@ export component AppWindow inherits Window {
                 Rectangle { background: transparent; horizontal-stretch: 1; }
 
                 ActionButton {
+                    text: "Compact view";
+                    max-width: 130px;
+                    clicked => { root.set-dashboard-mode(true); }
+                }
+
+                ActionButton {
                     text: "Previous stage";
                     enabled: root.can-go-previous-stage;
                     max-width: 150px;
@@ -1978,8 +2133,7 @@ export component AppWindow inherits Window {
 
         Rectangle {
             width: min(560px, root.width - 48px);
-            min-height: 240px;
-            max-height: 292px;
+            height: min(292px, root.height - 32px);
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
             background: Theme.surface-raised;

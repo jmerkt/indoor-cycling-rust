@@ -60,6 +60,8 @@ pub struct AppConfiguration {
     pub latest_workout: StoredWorkout,
     #[serde(default)]
     pub window: Option<WindowConfiguration>,
+    #[serde(default)]
+    pub compact_dashboard: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -725,6 +727,7 @@ mod tests {
         ));
         let store = ConfigurationStore::new(&path);
         let configuration = AppConfiguration {
+            compact_dashboard: true,
             version: 3,
             ftp_watts: 245,
             workout_builder: WorkoutBuilderConfiguration {
@@ -746,7 +749,7 @@ mod tests {
             },
             window: Some(WindowConfiguration {
                 logical_width: 1100.,
-                logical_height: 820.,
+                logical_height: 340.,
             }),
         };
 
@@ -787,6 +790,7 @@ mod tests {
         .unwrap();
 
         let configuration = store.load().unwrap().unwrap();
+        assert!(!configuration.compact_dashboard);
         assert_eq!(configuration.workout_builder.effort_intensity, 3);
         assert_eq!(configuration.workout_builder.workout_type, 3);
         assert_eq!(configuration.workout_builder.recovery_intensity, 2);

@@ -34,6 +34,7 @@ struct AppState {
     workout_builder: WorkoutBuilderConfiguration,
     ride_file_store: Option<RideFileStore>,
     window: Option<WindowConfiguration>,
+    compact_dashboard: bool,
     smart_trainer_connected: bool,
     erg_enabled: bool,
     erg_command_pending: bool,
@@ -96,6 +97,8 @@ impl AppState {
             workout_builder,
             ride_file_store: RideFileStore::for_current_user().ok(),
             window: configuration.and_then(|configuration| configuration.window.clone()),
+            compact_dashboard: configuration
+                .is_some_and(|configuration| configuration.compact_dashboard),
             smart_trainer_connected: false,
             erg_enabled: false,
             erg_command_pending: false,
@@ -117,6 +120,7 @@ impl AppState {
             workout_builder: self.workout_builder.clone(),
             latest_workout: stored_workout(self.workout.workout()),
             window: self.window.clone(),
+            compact_dashboard: self.compact_dashboard,
         }
     }
 
@@ -162,16 +166,62 @@ fn main() -> Result<(), slint::PlatformError> {
 
     window.set_discovered_devices(ModelRc::from(Rc::clone(&discovered_devices)));
     window.set_workout_stages(ModelRc::from(Rc::clone(&state.borrow().workout_stages)));
+    window.set_compact_dashboard(state.borrow().compact_dashboard);
     if let Some(window_size) = state.borrow().window.as_ref().filter(|size| {
         size.logical_width.is_finite()
             && size.logical_height.is_finite()
             && size.logical_width >= 640.
-            && size.logical_height >= 480.
+            && size.logical_height >= 340.
     }) {
         window.window().set_size(slint::LogicalSize::new(
             window_size.logical_width,
             window_size.logical_height,
         ));
+    }
+    {
+        let window_weak = window.as_weak();
+        let state = Rc::clone(&state);
+        let configuration_store = configuration_store.clone();
+        let mut full_size = if state.borrow().compact_dashboard {
+            slint::LogicalSize::new(1220., 840.)
+        } else {
+            window
+                .window()
+                .size()
+                .to_logical(window.window().scale_factor())
+        };
+        let mut compact_size = slint::LogicalSize::new(full_size.width.max(1040.), 340.);
+        let mut full_maximized = false;
+        window.on_set_dashboard_mode(move |compact| {
+            let Some(window) = window_weak.upgrade() else {
+                return;
+            };
+            let current_size = window
+                .window()
+                .size()
+                .to_logical(window.window().scale_factor());
+            if window.get_compact_dashboard() {
+                compact_size = current_size;
+            } else {
+                full_size = current_size;
+                full_maximized = window.window().is_maximized();
+                compact_size.width = current_size.width.max(1040.);
+            }
+            window.set_compact_dashboard(compact);
+            let size = if compact { compact_size } else { full_size };
+            window.window().set_maximized(false);
+            window.window().set_size(size);
+            if !compact && full_maximized {
+                window.window().set_maximized(true);
+            }
+            let mut state = state.borrow_mut();
+            state.compact_dashboard = compact;
+            state.window = Some(WindowConfiguration {
+                logical_width: size.width,
+                logical_height: size.height,
+            });
+            persist_configuration(configuration_store.as_ref(), &state);
+        });
     }
     let builder = state.borrow().workout_builder.clone();
     window.set_draft_length_minutes(builder.length_minutes);

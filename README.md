@@ -54,6 +54,20 @@ From the repository root:
 cargo run -p indoor-cycling-app
 ```
 
+## Compact dashboard
+
+Click **Compact view** in the dashboard's bottom control bar to switch to a wide,
+short dashboard for use above or below a browser or video. The compact view is
+340 logical pixels high by default (minimum width: 1040 logical pixels), keeping
+power, target, cadence, heart rate, and the stage countdown visible alongside a
+shallow workout timeline.
+
+Ride controls, workout intensity (the **SCALE** control), and ERG mode remain
+available. Click **Full dashboard** to return to the full view and access workout
+or device configuration. Switching views preserves the running workout and
+restores the previous full window size. The app remembers the selected mode and
+window size when closed.
+
 ## Build and run a release
 
 Build the optimized binary:
