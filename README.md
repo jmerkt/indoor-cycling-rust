@@ -46,6 +46,10 @@ sudo apt-get update
 sudo apt-get install build-essential pkg-config libfontconfig1-dev libxkbcommon-x11-0 bluez
 ```
 
+For the Barrot USB Bluetooth adapter `33fa:0010` with Linux controller-reset
+errors, see the [local driver workaround](tools/barrot-bluetooth/README.md).
+It includes commands to rebuild, reload after reboot, and restore Ubuntu's drivers.
+
 ## Run in development
 
 From the repository root:

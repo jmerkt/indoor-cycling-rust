@@ -1,0 +1,62 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Local adaptation of Ernesto Salvetti's Barrot LE fixes.
+--- a/drivers/bluetooth/btusb.c
++++ b/drivers/bluetooth/btusb.c
+@@ -4456,6 +4456,12 @@
+ 		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_WRITE_AUTH_PAYLOAD_TIMEOUT);
+ 	}
+ 
++	/* Barrot 33fa:0010 hangs on extended LE scanning/connection. */
++	if ((id->driver_info & BTUSB_BARROT) && id->idProduct == 0x0010) {
++		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_EXT_SCAN);
++		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_EXT_CREATE_CONN);
++	}
++
+ 	if (!reset)
+ 		hci_set_quirk(hdev, HCI_QUIRK_RESET_ON_CLOSE);
+ 
+--- a/include/net/bluetooth/hci.h
++++ b/include/net/bluetooth/hci.h
+@@ -722,6 +722,7 @@
+ #define HCI_ERROR_UNSUPPORTED_REMOTE_FEATURE	0x1a
+ #define HCI_ERROR_INVALID_LL_PARAMS	0x1e
+ #define HCI_ERROR_UNSPECIFIED		0x1f
++#define HCI_ERROR_CONTROLLER_BUSY	0x3a
+ #define HCI_ERROR_ADVERTISING_TIMEOUT	0x3c
+ #define HCI_ERROR_CANCELLED_BY_HOST	0x44
+ 
+--- a/include/net/bluetooth/hci_core.h
++++ b/include/net/bluetooth/hci_core.h
+@@ -2024,7 +2024,10 @@
+ #define use_ext_conn(dev) (((dev)->commands[37] & 0x80) && \
+ 	!hci_test_quirk((dev), HCI_QUIRK_BROKEN_EXT_CREATE_CONN))
+ /* Extended advertising support */
+-#define ext_adv_capable(dev) (((dev)->le_features[1] & HCI_LE_EXT_ADV))
++/* This Barrot firmware must not mix legacy and extended LE commands. */
++#define ext_adv_capable(dev) (((dev)->le_features[1] & HCI_LE_EXT_ADV) && \
++	!((dev)->manufacturer == 0x08e7 && \
++	  hci_test_quirk((dev), HCI_QUIRK_BROKEN_EXT_SCAN)))
+ 
+ /* Maximum advertising length */
+ #define max_adv_len(dev) \
+--- a/net/bluetooth/hci_event.c
++++ b/net/bluetooth/hci_event.c
+@@ -2924,8 +2924,17 @@
+ 	hci_dev_lock(hdev);
+ 
+ 	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(cp->handle));
+-	if (conn && conn->state == BT_CONFIG)
++	if (conn && conn->state == BT_CONFIG) {
++		/* Barrot can reject the optional remote-feature query as busy. */
++		if (status == HCI_ERROR_CONTROLLER_BUSY &&
++		    hdev->manufacturer == 0x08e7 &&
++		    hci_test_quirk(hdev, HCI_QUIRK_BROKEN_EXT_SCAN)) {
++			bt_dev_warn(hdev, "Barrot remote features busy; using basic LE connection");
++			conn->state = BT_CONNECTED;
++			status = 0;
++		}
+ 		hci_connect_cfm(conn, status);
++	}
+ 
+ 	hci_dev_unlock(hdev);
+ }
