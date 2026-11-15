@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::pin::Pin;
 
 use btleplug::api::{Characteristic, Peripheral as _, ValueNotification, WriteType};
@@ -313,7 +314,22 @@ pub async fn connect(
         }
 
         match peripheral.notifications().await {
-            Ok(notifications) => Some(notifications),
+            Ok(notifications) => {
+                // On BlueZ, the notification stream stays open after a physical
+                // disconnect. End it explicitly so the service clears every
+                // affected role instead of displaying the last sample forever.
+                let monitored_peripheral = peripheral.clone();
+                let disconnected = wait_for_disconnect(
+                    move || {
+                        let peripheral = monitored_peripheral.clone();
+                        async move { peripheral.is_connected().await }
+                    },
+                    Duration::from_secs(1),
+                    Duration::from_secs(2),
+                );
+                Some(Box::pin(notifications.take_until(disconnected))
+                    as Pin<Box<dyn Stream<Item = ValueNotification> + Send>>)
+            }
             Err(error) => {
                 disconnect_if_owned(&peripheral, was_connected).await;
                 return Err(connection_failed(error));
@@ -351,6 +367,22 @@ pub async fn connect(
         manual_resistance_fallback,
         cadence_tracker: CadenceTracker::default(),
     })
+}
+
+async fn wait_for_disconnect<Check, CheckFuture, Error>(
+    mut check: Check,
+    interval: Duration,
+    query_timeout: Duration,
+) where
+    Check: FnMut() -> CheckFuture,
+    CheckFuture: Future<Output = Result<bool, Error>>,
+{
+    loop {
+        tokio::time::sleep(interval).await;
+        if !matches!(timeout(query_timeout, check()).await, Ok(Ok(true))) {
+            return;
+        }
+    }
 }
 
 fn default_manual_resistance_level(range: fitness_machine::SupportedResistanceLevelRange) -> i16 {
@@ -393,6 +425,64 @@ fn role_name(role: DeviceRole) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn notification_stream_ends_when_the_physical_link_is_lost() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let connected = Arc::new(AtomicBool::new(true));
+        let check = Arc::clone(&connected);
+        let disconnected = wait_for_disconnect(
+            move || std::future::ready(Ok::<_, ()>(check.load(Ordering::Relaxed))),
+            Duration::from_millis(1),
+            Duration::from_millis(20),
+        );
+        let (sender, stream) = futures::channel::mpsc::unbounded::<u8>();
+        let mut notifications = Box::pin(stream.take_until(disconnected));
+        sender.unbounded_send(42).unwrap();
+        assert_eq!(notifications.next().await, Some(42));
+        connected.store(false, Ordering::Relaxed);
+        assert_eq!(
+            timeout(Duration::from_secs(1), notifications.next())
+                .await
+                .unwrap(),
+            None
+        );
+        // The source itself never closed: only the link-health check ended it.
+        assert!(!sender.is_closed());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn missing_device_ends_health_monitor_after_a_successful_check() {
+        let mut checks = [Ok(true), Err(())].into_iter();
+        timeout(
+            Duration::from_secs(1),
+            wait_for_disconnect(
+                || std::future::ready(checks.next().expect("health monitor must stop on error")),
+                Duration::from_millis(1),
+                Duration::from_millis(20),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(checks.next().is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn unresponsive_backend_does_not_leave_health_monitor_waiting_forever() {
+        timeout(
+            Duration::from_secs(1),
+            wait_for_disconnect(
+                std::future::pending::<Result<bool, ()>>,
+                Duration::from_millis(1),
+                Duration::from_millis(10),
+            ),
+        )
+        .await
+        .unwrap();
+    }
 
     #[test]
     fn chooses_a_moderate_supported_manual_resistance() {

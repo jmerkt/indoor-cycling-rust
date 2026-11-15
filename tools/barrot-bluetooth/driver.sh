@@ -50,6 +50,7 @@ if [[ "$action" == load ]]; then
         fi
     done
     if active; then
+        python3 "$script_dir/link-parameters.py" apply
         echo "Barrot workaround is already active for $kernel."
         exit 0
     fi
@@ -70,6 +71,8 @@ esac
 rollback() {
     trap - ERR
     echo "Attempting to restore Ubuntu's Bluetooth modules." >&2
+    systemctl mask --runtime bluetooth || true
+    systemctl stop bluetooth || true
     modprobe -r btusb bnep rfcomm 2>/dev/null || true
     modprobe -r bluetooth 2>/dev/null || true
     modprobe btusb || true
@@ -92,6 +95,9 @@ else
 fi
 systemctl unmask --runtime bluetooth
 systemctl start bluetooth
+if [[ "$action" == load ]]; then
+    python3 "$script_dir/link-parameters.py" apply
+fi
 trap - ERR
 if [[ "$action" == load ]]; then
     echo "Barrot workaround active for $kernel until reboot or restore."

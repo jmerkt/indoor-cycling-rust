@@ -66,6 +66,38 @@ An explicit source tag can be supplied for a matching installed headers package:
 python3 tools/barrot-bluetooth/build.py --source-tag Ubuntu-7.0.0-43.43
 ```
 
+## Trainer connections dropping after about 45 seconds
+
+A longer test found that the VANRYSEL trainer requested a 25–100 ms connection
+interval with a 13.5-second supervision timeout. Linux's cached trainer profile
+instead used a 30–50 ms range and a 420 ms timeout, rejected the update, and the
+link repeatedly timed out after about 45 seconds. Changing adapter defaults alone
+did not update this per-device cache.
+
+Save the tested profile for your trainer, using its address from `bluetoothctl devices`:
+
+```sh
+python3 tools/barrot-bluetooth/link-parameters.py remember AA:BB:CC:DD:EE:FF --address-type public
+```
+
+Use `--address-type random` only if `bluetoothctl info <address>` identifies a
+random address. This profile is intended for a trainer with the same requested
+parameters; it is not a general setting for every sensor.
+
+The address and settings are saved in `tools/barrot-bluetooth/local/`, ignored by
+Git and preserved across reboots and `cargo clean`. The `driver.sh load` command
+now applies saved profiles using Linux's management interface, including when
+the workaround is already loaded. To apply just the profile without reloading:
+
+```sh
+sudo python3 tools/barrot-bluetooth/link-parameters.py apply
+```
+
+The setting is applied only to Barrot `33fa:0010` adapters. No BlueZ system
+configuration is edited. Removing the local profile prevents future application;
+restoring Ubuntu's drivers or rebooting clears the runtime override. Once an
+official fix is available, test the stock driver before applying saved profiles.
+
 ## Restore Ubuntu's drivers
 
 Close the cycling app and disconnect Bluetooth devices, then run:
@@ -87,7 +119,9 @@ with Secure Boot enabled, normal kernel module signing requirements still apply.
 With the workaround loaded, Rally power/cadence and trainer power/control all
 connected; power measurements arrived from both devices and the adapter reset
 loop stopped. The user also confirmed connections work in the application.
-Heart-rate testing was deferred. ERG/resistance commands were not part of the
+The follow-up sustained test reproduced the trainer timeout and verified continuing
+measurements after loading its requested per-device parameters. Heart-rate testing
+was not part of that follow-up. ERG/resistance commands were not part of the
 diagnostic test.
 
 The source patch is derived from Linux kernel code (GPL-2.0-only). The proposed

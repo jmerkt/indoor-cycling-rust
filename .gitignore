@@ -3,3 +3,5 @@
 .agents
 .codex
 
+/tools/barrot-bluetooth/local/
+/tools/barrot-bluetooth/__pycache__/
