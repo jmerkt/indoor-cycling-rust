@@ -4,11 +4,11 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use indoor_cycling_core::{
-    RideRecorder, Workout, WorkoutEngine, WorkoutParameters, WorkoutPhase, WorkoutType,
+    RideRecorder, RideSample, Workout, WorkoutEngine, WorkoutParameters, WorkoutPhase, WorkoutType,
 };
 use indoor_cycling_devices::{
     BluetoothDeviceService, DeviceCapabilities, DeviceId, DeviceMeasurement, DeviceRole,
-    DiscoveryEvent, SimulatedTrainer, TrainerDevice,
+    DiscoveryEvent,
 };
 use indoor_cycling_storage::{
     AppConfiguration, ConfigurationStore, RideFileStore, StoredWorkout, StoredWorkoutStep,
@@ -28,7 +28,6 @@ struct AppState {
     recorder: RideRecorder,
     workout: WorkoutEngine,
     workout_stages: Rc<VecModel<WorkoutStageItem>>,
-    trainer: SimulatedTrainer,
     ftp_watts: u16,
     workout_scale_percent: u16,
     workout_builder: WorkoutBuilderConfiguration,
@@ -50,9 +49,6 @@ struct AppState {
 
 impl AppState {
     fn new(configuration: Option<&AppConfiguration>) -> Self {
-        let mut trainer = SimulatedTrainer::new();
-        trainer.connect().expect("simulated trainer should connect");
-
         let ftp_watts = configuration
             .map(|configuration| configuration.ftp_watts.clamp(50, 600))
             .unwrap_or(DEFAULT_FTP_WATTS);
@@ -91,7 +87,6 @@ impl AppState {
             recorder: RideRecorder::new(),
             workout: WorkoutEngine::new(workout),
             workout_stages: Rc::new(VecModel::default()),
-            trainer,
             ftp_watts,
             workout_scale_percent: DEFAULT_WORKOUT_SCALE_PERCENT,
             workout_builder,
@@ -125,13 +120,25 @@ impl AppState {
     }
 
     fn reset_ride(&mut self) {
-        let mut trainer = SimulatedTrainer::new();
-        trainer.connect().expect("simulated trainer should connect");
         self.recorder = RideRecorder::new();
         self.workout.reset();
-        self.trainer = trainer;
         self.running = false;
         self.finish_dialog_resume_running = false;
+    }
+
+    fn record_sample(&mut self) {
+        let elapsed_secs = self
+            .recorder
+            .latest()
+            .map_or(1, |sample| sample.elapsed_secs + 1);
+        // Missing sensors must never be replaced by simulated measurements.
+        self.recorder.push(RideSample::new(
+            elapsed_secs,
+            self.external_power_watts.unwrap_or_default().max(0) as u16,
+            self.external_cadence_rpm.unwrap_or_default(),
+            self.external_heart_rate_bpm
+                .and_then(|value| u8::try_from(value).ok()),
+        ));
     }
 
     fn replace_workout(&mut self, workout: Workout) {
@@ -274,7 +281,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 i32::from(MAX_WORKOUT_SCALE_PERCENT),
             ))
             .unwrap_or(DEFAULT_WORKOUT_SCALE_PERCENT);
-            apply_current_target(&mut state);
             sync_erg_target(&mut state, bluetooth_service.as_deref());
             if let Some(window) = window_weak.upgrade() {
                 render(&window, &state);
@@ -335,7 +341,6 @@ fn main() -> Result<(), slint::PlatformError> {
         window.on_set_ftp(move |ftp_watts| {
             let mut state = state.borrow_mut();
             state.ftp_watts = u16::try_from(ftp_watts.clamp(50, 600)).unwrap_or(DEFAULT_FTP_WATTS);
-            apply_current_target(&mut state);
             sync_erg_target(&mut state, bluetooth_service.as_deref());
             persist_configuration(configuration_store.as_ref(), &state);
             if let Some(window) = window_weak.upgrade() {
@@ -380,7 +385,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 let has_recording = !state.recorder.samples().is_empty();
                 state.workout_builder = builder;
                 state.replace_workout(Workout::randomized(parameters));
-                apply_current_target(&mut state);
                 sync_erg_target(&mut state, bluetooth_service.as_deref());
                 persist_configuration(configuration_store.as_ref(), &state);
                 if let Some(window) = window_weak.upgrade() {
@@ -407,7 +411,6 @@ fn main() -> Result<(), slint::PlatformError> {
         window.on_previous_stage(move || {
             let mut state = state.borrow_mut();
             state.workout.go_to_previous_step();
-            apply_current_target(&mut state);
             sync_erg_target(&mut state, bluetooth_service.as_deref());
             if !state.running {
                 if let Some(window) = window_weak.upgrade() {
@@ -432,7 +435,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 state.workout.pause();
                 disable_erg(&mut state, bluetooth_service.as_deref());
             }
-            apply_current_target(&mut state);
             sync_erg_target(&mut state, bluetooth_service.as_deref());
             if let Some(window) = window_weak.upgrade() {
                 if matches!(state.workout.phase(), WorkoutPhase::Finished) {
@@ -1045,12 +1047,7 @@ fn tick(
 
     let phase = state.workout.tick();
     match phase {
-        WorkoutPhase::Active { step, .. } => {
-            let target_power_watts = scaled_target_power(
-                step.target_power_watts(state.ftp_watts),
-                state.workout_scale_percent,
-            );
-            let _ = state.trainer.set_target_power(target_power_watts);
+        WorkoutPhase::Active { .. } => {
             sync_erg_target(&mut state, bluetooth_service);
         }
         WorkoutPhase::Finished => {
@@ -1064,25 +1061,13 @@ fn tick(
         WorkoutPhase::NotStarted => {}
     }
 
-    if let Ok(mut sample) = state.trainer.next_sample() {
-        if let Some(power_watts) = state.external_power_watts {
-            sample.power_watts = u16::try_from(power_watts.max(0)).unwrap_or_default();
-        }
-        if let Some(cadence_rpm) = state.external_cadence_rpm {
-            sample.cadence_rpm = cadence_rpm;
-        }
-        if let Some(heart_rate_bpm) = state.external_heart_rate_bpm {
-            sample.heart_rate_bpm = u8::try_from(heart_rate_bpm).ok();
-        }
-        state.recorder.push(sample);
-    }
+    state.record_sample();
 
     render(window, &state);
 }
 
 fn render(window: &AppWindow, state: &AppState) {
     let stats = state.recorder.stats();
-    let latest = state.recorder.latest();
     let phase = state.workout.phase();
 
     window.set_workout_name(state.workout.workout().name.clone().into());
@@ -1117,7 +1102,6 @@ fn render(window: &AppWindow, state: &AppState) {
         state
             .external_power_watts
             .map(|value| i32::from(value.max(0)))
-            .or_else(|| latest.map(|sample| i32::from(sample.power_watts)))
             .unwrap_or_default(),
     );
     window.set_secondary_power_watts(
@@ -1130,28 +1114,16 @@ fn render(window: &AppWindow, state: &AppState) {
         state
             .external_cadence_rpm
             .map(i32::from)
-            .or_else(|| latest.map(|sample| i32::from(sample.cadence_rpm)))
             .unwrap_or_default(),
     );
     window.set_heart_rate_bpm(
         state
             .external_heart_rate_bpm
             .map(i32::from)
-            .or_else(|| {
-                latest
-                    .and_then(|sample| sample.heart_rate_bpm)
-                    .map(i32::from)
-            })
             .unwrap_or_default(),
     );
     window.set_average_power_text(format!("{:.0} W", stats.average_power_watts).into());
     render_workout(window, state, &phase);
-}
-
-fn apply_current_target(state: &mut AppState) {
-    if let Some(target_power_watts) = current_target_power(state) {
-        let _ = state.trainer.set_target_power(target_power_watts);
-    }
 }
 
 fn current_target_power(state: &AppState) -> Option<u16> {
@@ -1570,6 +1542,56 @@ mod tests {
     use indoor_cycling_core::{RideSample, WorkoutStep};
 
     #[test]
+    fn recording_without_sensors_uses_zero_or_missing_metrics() {
+        let mut state = AppState::new(None);
+        state.record_sample();
+        state.record_sample();
+
+        assert_eq!(
+            state.recorder.samples(),
+            &[
+                RideSample::new(1, 0, 0, None),
+                RideSample::new(2, 0, 0, None),
+            ]
+        );
+        state.reset_ride();
+        state.record_sample();
+        assert_eq!(state.recorder.samples(), &[RideSample::new(1, 0, 0, None)]);
+    }
+
+    #[test]
+    fn recording_uses_only_available_sensor_metrics() {
+        let mut state = AppState::new(None);
+        state.external_power_watts = Some(180);
+        state.record_sample();
+        state.external_cadence_rpm = Some(88);
+        state.external_heart_rate_bpm = Some(125);
+        state.record_sample();
+
+        let state = Rc::new(RefCell::new(state));
+        for role in [
+            DeviceRole::PowerSource,
+            DeviceRole::Cadence,
+            DeviceRole::HeartRate,
+        ] {
+            clear_role_measurement(&state, role);
+        }
+        state.borrow_mut().record_sample();
+        state.borrow_mut().external_cadence_rpm = Some(90);
+        state.borrow_mut().record_sample();
+
+        assert_eq!(
+            state.borrow().recorder.samples(),
+            &[
+                RideSample::new(1, 180, 0, None),
+                RideSample::new(2, 180, 88, Some(125)),
+                RideSample::new(3, 0, 0, None),
+                RideSample::new(4, 0, 90, None),
+            ]
+        );
+    }
+
+    #[test]
     fn replacing_workout_preserves_running_recording() {
         let sample = RideSample::new(1, 180, 88, Some(125));
         let mut state = AppState::new(None);
@@ -1621,7 +1643,6 @@ mod tests {
         assert_eq!(current_target_power(&state), Some(240));
 
         state.ftp_watts = 250;
-        apply_current_target(&mut state);
 
         assert_eq!(current_target_power(&state), Some(300));
         assert!(state.running);
