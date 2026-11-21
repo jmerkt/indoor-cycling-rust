@@ -1176,6 +1176,7 @@ export component AppWindow inherits Window {
     in property <bool> smart-trainer-connection-error: false;
     in property <bool> finish-dialog-open: false;
     in property <string> finish-error;
+    private property <bool> confirm-discard: false;
 
     callback start-ride();
     callback pause-ride();
@@ -2146,14 +2147,16 @@ export component AppWindow inherits Window {
                 spacing: 14px;
 
                 Text {
-                    text: "Finish workout?";
+                    text: root.confirm-discard ? "Discard workout?" : "Finish workout?";
                     color: Theme.text;
                     font-size: 24px;
                     font-weight: 800;
                 }
 
                 Text {
-                    text: "Save a FIT activity file for upload, discard this ride, or resume where you left off.";
+                    text: root.confirm-discard
+                        ? "This will permanently discard the workout recording without saving a FIT file."
+                        : "Save a FIT activity file for upload, discard this ride, or resume where you left off.";
                     color: Theme.text-secondary;
                     font-size: 15px;
                     wrap: word-wrap;
@@ -2164,7 +2167,7 @@ export component AppWindow inherits Window {
                     color: Theme.danger;
                     font-size: 13px;
                     min-height: root.finish-error == "" ? 0px : 20px;
-                    visible: root.finish-error != "";
+                    visible: !root.confirm-discard && root.finish-error != "";
                     wrap: word-wrap;
                 }
 
@@ -2173,7 +2176,7 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                 }
 
-                HorizontalBox {
+                if !root.confirm-discard : HorizontalBox {
                     spacing: 10px;
 
                     ActionButton {
@@ -2184,13 +2187,35 @@ export component AppWindow inherits Window {
                     ActionButton {
                         text: "Finish and discard";
                         variant: 2;
-                        clicked => { root.finish-and-discard(); }
+                        clicked => { root.confirm-discard = true; }
                     }
 
                     ActionButton {
                         text: "Finish and save";
                         variant: 1;
                         clicked => { root.finish-and-save(); }
+                    }
+                }
+
+                if root.confirm-discard : HorizontalBox {
+                    spacing: 10px;
+
+                    ActionButton {
+                        text: "Cancel";
+                        max-width: 120px;
+                        clicked => { root.confirm-discard = false; }
+                    }
+
+                    Rectangle { background: transparent; horizontal-stretch: 1; }
+
+                    ActionButton {
+                        text: "Discard workout";
+                        variant: 2;
+                        max-width: 140px;
+                        clicked => {
+                            root.confirm-discard = false;
+                            root.finish-and-discard();
+                        }
                     }
                 }
             }
